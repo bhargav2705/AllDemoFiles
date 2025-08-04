@@ -1,0 +1,327 @@
+<dependencies>
+    <dependency>
+        <groupId>org.seleniumhq.selenium</groupId>
+        <artifactId>selenium-java</artifactId>
+        <version>4.22.0</version>
+    </dependency>
+
+    <dependency>
+        <groupId>net.sourceforge.tess4j</groupId>
+        <artifactId>tess4j</artifactId>
+        <version>5.10.0</version>
+    </dependency>
+    
+    <dependency>
+        <groupId>commons-io</groupId>
+        <artifactId>commons-io</artifactId>
+        <version>2.15.1</version>
+    </dependency>
+</dependencies>
+
+
+
+Sample Code (Java with Selenium)
+This code demonstrates how to:
+
+Find all the keypad image elements.
+
+Iterate through them, extract their Base64 src, and decode it.
+
+Use Tesseract to read the number from each decoded image.
+
+Store this number-to-element mapping in a Map.
+
+Use the map to click the correct sequence of buttons to enter a 4-digit PIN.
+
+
+Sample automation code:
+
+
+import net.sourceforge.tess4j.Tesseract;
+import net.sourceforge.tess4j.TesseractException;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.chrome.ChromeDriver;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class KeypadAutomation {
+
+    public static void main(String[] args) throws InterruptedException {
+
+        // --- 1. Selenium WebDriver setup ---
+        // System.setProperty("webdriver.chrome.driver", "path/to/chromedriver");
+        WebDriver driver = new ChromeDriver();
+        driver.manage().window().maximize();
+
+        // The PIN you want to enter
+        String accessCodePin = "1234";
+
+        try {
+            // Navigate to the page with the keypad
+            driver.get("https://your-website-with-keypad.com"); // Replace with actual URL
+
+            // --- 2. Find all keypad image elements ---
+            // Use a locator that can find all the keys. For example, if they all have the same class.
+            List<WebElement> keypadImages = driver.findElements(By.cssSelector("div.keypad-button img")); // Adjust this locator
+
+            if (keypadImages.isEmpty()) {
+                System.err.println("Could not find any keypad images. Check your locator.");
+                return;
+            }
+
+            // --- 3. Map numbers to WebElements using Tesseract OCR ---
+            Map<Integer, WebElement> keypadMap = new HashMap<>();
+            Tesseract tesseract = new Tesseract();
+            tesseract.setDatapath("C:\\Program Files\\Tesseract-OCR\\tessdata"); // Adjust Tesseract path
+            tesseract.setLanguage("eng");
+
+            for (WebElement imageElement : keypadImages) {
+                String src = imageElement.getAttribute("src");
+                if (src == null || !src.startsWith("data:image")) {
+                    System.err.println("Element src is not a Base64 image, skipping.");
+                    continue;
+                }
+                
+                String base64Image = src.replaceFirst("data:image/[^;]+;base64,", "");
+                File tempFile = new File("temp_key.png");
+                
+                try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                    byte[] imageBytes = Base64.getDecoder().decode(base64Image);
+                    fos.write(imageBytes);
+
+                    // Perform OCR on the temporary image file
+                    String extractedText = tesseract.doOCR(tempFile).trim();
+                    
+                    // The OCR output might contain non-digit characters.
+                    // Clean it up to get just the number.
+                    extractedText = extractedText.replaceAll("[^0-9]", "");
+                    
+                    if (!extractedText.isEmpty()) {
+                        int number = Integer.parseInt(extractedText);
+                        keypadMap.put(number, imageElement);
+                        System.out.println("Mapped number " + number + " to a keypad button.");
+                    } else {
+                        System.err.println("Tesseract could not identify a number for one of the keys.");
+                    }
+
+                } catch (IOException | TesseractException | NumberFormatException e) {
+                    System.err.println("Error processing a keypad image: " + e.getMessage());
+                } finally {
+                    // Always delete the temporary file
+                    if (tempFile.exists()) {
+                        tempFile.delete();
+                    }
+                }
+            }
+
+            // --- 4. Click the buttons for the access code ---
+            System.out.println("Attempting to enter PIN: " + accessCodePin);
+            for (char digitChar : accessCodePin.toCharArray()) {
+                int digit = Character.getNumericValue(digitChar);
+
+                WebElement buttonToClick = keypadMap.get(digit);
+                if (buttonToClick != null) {
+                    buttonToClick.click();
+                    System.out.println("Clicked on button for number: " + digit);
+                    // Add a short wait to simulate human interaction
+                    Thread.sleep(500);
+                } else {
+                    System.err.println("Could not find keypad button for digit: " + digit);
+                    break;
+                }
+            }
+            
+            System.out.println("PIN entry complete.");
+            
+        } catch (Exception e) {
+            System.err.println("An unexpected error occurred: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            // Clean up by closing the browser
+            if (driver != null) {
+                driver.quit();
+            }
+        }
+    }
+}
+------------------------------------------------------------------------------------------
+
+using opencv
+
+
+import org.apache.commons.io.FileUtils;
+import org.bytedeco.javacpp.opencv_core.*;
+import org.bytedeco.javacpp.opencv_imgcodecs;
+import org.bytedeco.javacpp.opencv_imgproc;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.chrome.ChromeDriver;
+
+import javax.imageio.ImageIO;
+import java.io.File;
+import java.util.*;
+
+import static org.bytedeco.javacpp.opencv_imgcodecs.imread;
+
+public class KeypadTemplateMatching {
+
+    public static void main(String[] args) throws Exception {
+        WebDriver driver = new ChromeDriver();
+        driver.get("https://your-app.com/keypad");
+
+        String pin = "4932";
+
+        // Step 1: Load reference images for digits 0-9
+        Map<String, Mat> digitTemplates = new HashMap<>();
+        for (int i = 0; i <= 9; i++) {
+            Mat img = imread("reference_digits/" + i + ".png", opencv_imgcodecs.IMREAD_GRAYSCALE);
+            digitTemplates.put(String.valueOf(i), img);
+        }
+
+        // Step 2: Get keypad buttons
+        List<WebElement> buttons = driver.findElements(By.cssSelector("img.keypad-button"));
+        Map<String, WebElement> digitToElementMap = new HashMap<>();
+
+        int i = 0;
+        for (WebElement button : buttons) {
+            String base64 = button.getAttribute("src").split(",")[1];
+            byte[] imageBytes = Base64.getDecoder().decode(base64);
+            File tempImg = new File("button" + i + ".png");
+            FileUtils.writeByteArrayToFile(tempImg, imageBytes);
+
+            Mat testImg = imread(tempImg.getAbsolutePath(), opencv_imgcodecs.IMREAD_GRAYSCALE);
+
+            String matchedDigit = matchDigit(testImg, digitTemplates);
+            if (matchedDigit != null) {
+                digitToElementMap.put(matchedDigit, button);
+                System.out.println("Matched digit " + matchedDigit + " to button " + i);
+            }
+
+            tempImg.delete();
+            i++;
+        }
+
+        // Step 3: Click digits based on PIN
+        for (char digit : pin.toCharArray()) {
+            WebElement btn = digitToElementMap.get(String.valueOf(digit));
+            if (btn != null) {
+                btn.click();
+            } else {
+                System.out.println("Could not find button for digit: " + digit);
+            }
+        }
+
+        // driver.quit(); // Uncomment after testing
+    }
+
+    // Template matching function
+    private static String matchDigit(Mat testImg, Map<String, Mat> digitTemplates) {
+        double maxScore = -1;
+        String matchedDigit = null;
+
+        for (Map.Entry<String, Mat> entry : digitTemplates.entrySet()) {
+            String digit = entry.getKey();
+            Mat template = entry.getValue();
+
+            Mat result = new Mat();
+            opencv_imgproc.matchTemplate(testImg, template, result, opencv_imgproc.TM_CCOEFF_NORMED);
+
+            DoublePointer minVal = new DoublePointer();
+            DoublePointer maxVal = new DoublePointer();
+            Point minLoc = new Point();
+            Point maxLoc = new Point();
+            opencv_core.minMaxLoc(result, minVal, maxVal, minLoc, maxLoc, null);
+
+            double score = maxVal.get();
+            if (score > maxScore && score > 0.8) { // adjust threshold
+                maxScore = score;
+                matchedDigit = digit;
+            }
+        }
+
+        return matchedDigit;
+    }
+}
+------------------------------------------------------------------------------------------------------------------------------------------------
+import net.sourceforge.tess4j.ITesseract;
+import net.sourceforge.tess4j.Tesseract;
+import net.sourceforge.tess4j.TesseractException;
+import org.apache.commons.io.FileUtils;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.chrome.ChromeDriver;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.util.*;
+
+public class OCRKeypadAutomation {
+
+    public static void main(String[] args) throws Exception {
+        WebDriver driver = new ChromeDriver();
+        driver.get("https://your-app.com/keypad");
+
+        // Set your 4-digit PIN
+        String pin = "4932";
+
+        // Initialize Tesseract OCR
+        ITesseract tesseract = new Tesseract();
+        tesseract.setDatapath("C:/Program Files/Tesseract-OCR/tessdata"); // Change path accordingly
+        tesseract.setLanguage("eng");
+        tesseract.setTessVariable("tessedit_char_whitelist", "0123456789");
+
+        // Find all keypad buttons
+        List<WebElement> buttons = driver.findElements(By.cssSelector("img.keypad-button"));
+
+        // Build digit → button mapping using OCR
+        Map<String, WebElement> digitElementMap = new HashMap<>();
+
+        int i = 0;
+        for (WebElement button : buttons) {
+            String base64 = button.getAttribute("src").split(",")[1];
+            byte[] imageBytes = Base64.getDecoder().decode(base64);
+
+            File imageFile = new File("temp" + i + ".png");
+            FileUtils.writeByteArrayToFile(imageFile, imageBytes);
+
+            BufferedImage bufferedImage = ImageIO.read(imageFile);
+            String ocrResult = "";
+
+            try {
+                ocrResult = tesseract.doOCR(bufferedImage).replaceAll("[^0-9]", "").trim();
+                if (!ocrResult.isEmpty() && !digitElementMap.containsKey(ocrResult)) {
+                    digitElementMap.put(ocrResult, button);
+                    System.out.println("Mapped digit " + ocrResult + " to button " + i);
+                }
+            } catch (TesseractException e) {
+                System.err.println("OCR failed for button " + i);
+            }
+
+            imageFile.delete(); // Clean up
+            i++;
+        }
+
+        // Click buttons according to the PIN
+        for (char digit : pin.toCharArray()) {
+            WebElement btn = digitElementMap.get(String.valueOf(digit));
+            if (btn != null) {
+                btn.click();
+            } else {
+                System.err.println("Digit not found or OCR failed: " + digit);
+            }
+        }
+
+        // driver.quit(); // Uncomment after testing
+    }
+}
+
