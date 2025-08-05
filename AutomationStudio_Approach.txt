@@ -1,0 +1,222 @@
+Automation Studio pseudo code
+
+// Load necessary libraries:
+// - Selenium/Appium for UI interaction
+// - tess4J (Java wrapper for Tesseract OCR)
+// - Java IO and image processing libraries
+
+// Step 1: Navigate to the screen with the image (e.g., keypad with base64 images)
+// Initialize Selenium or Appium driver
+WebDriver driver = initializeDriver();
+driver.get("url_of_application_with_keypad_or_image");
+
+// Step 2: Identify the image element containing the digit or text to extract
+WebElement imageElement = driver.findElement(By.cssSelector("img.uia-pin-*")); // or other locator
+
+// Step 3: Capture the image displayed by the element
+// Option 1: Get the 'src' attribute containing base64 data
+String base64Image = imageElement.getAttribute("src");
+
+// Step 4: Convert base64 string to BufferedImage
+byte[] imageBytes = Base64.getDecoder().decode(base64Image.split(",")[1]);
+InputStream in = new ByteArrayInputStream(imageBytes);
+BufferedImage bufferedImage = ImageIO.read(in);
+
+// Optional: Save image to disk (for debugging or external use)
+ImageIO.write(bufferedImage, "png", new File("capturedImage.png"));
+
+// Step 5: Initialize Tesseract OCR engine (using tess4J)
+Tesseract tesseract = new Tesseract();
+tesseract.setDatapath("Path_to_tessdata_folder");  // path to tessdata directory
+tesseract.setLanguage("eng");  // configure language as needed
+
+// Step 6: Perform OCR on BufferedImage
+String extractedText = tesseract.doOCR(bufferedImage);
+
+// Step 7: Post-process extractedText (e.g., remove whitespaces, filter digits)
+String cleanedText = extractedText.replaceAll("[^0-9]", "");
+
+// Step 8: Use the extracted digit(s) in your automation logic
+// For example, map extracted digit to keypad button and click it
+
+// Optional: Repeat for all keypad image elements to build digit-to-element map
+
+// Cleanup
+driver.quit();
+
+-------------------------------------------------------------------------------------
+
+// Assume you have:
+// Map<Integer, WebElement> digitToElementMap - maps each digit 0-9 to its corresponding clickable element
+// String pin = "1234"; // The PIN you want to enter
+
+for (char ch : pin.toCharArray()) {
+    int digit = Character.getNumericValue(ch);
+
+    // Find the corresponding element for this digit
+    WebElement digitElement = digitToElementMap.get(digit);
+
+    if (digitElement != null) {
+        // Click the button representing this digit
+        digitElement.click();
+
+        // Optionally add a small wait/delay for UI stability
+        Thread.sleep(200);
+    } else {
+        // Handle the case where digit not found (log or throw error)
+        System.out.println("No button found for digit: " + digit);
+        throw new RuntimeException("Digit " + digit + " not found on keypad.");
+    }
+}
+
+--------------------------------------------------------------------------------------------------------------------
+
+// Step 1: Setup Selenium/Appium driver and navigate to keypad screen
+WebDriver driver = initializeDriver();
+driver.get("url_of_application_with_keypad");
+
+// Step 2: Locate all keypad image elements (assumed class pattern "uia-pin-{index}")
+List<WebElement> keypadImages = driver.findElements(By.cssSelector("img[class^='uia-pin-']"));
+
+// Step 3: Retrieve base64 strings into an array corresponding to buttons on the page
+String[] base64Images = new String[keypadImages.size()];
+for (int i = 0; i < keypadImages.size(); i++) {
+    base64Images[i] = keypadImages.get(i).getAttribute("src");
+}
+
+// Step 4: Initialize OCR engine (tess4J)
+Tesseract tesseract = new Tesseract();
+tesseract.setDatapath("Path_to_tessdata");
+tesseract.setLanguage("eng");
+
+// Step 5: Extract digits from images using OCR, store in an int array by the same index
+int[] recognizedDigits = new int[base64Images.length];
+for (int i = 0; i < base64Images.length; i++) {
+    BufferedImage img = decodeBase64ToImage(base64Images[i]);
+    String ocrText = tesseract.doOCR(img);
+    String cleanedText = ocrText.replaceAll("[^0-9]", "");
+    
+    if (!cleanedText.isEmpty()) {
+        recognizedDigits[i] = Integer.parseInt(cleanedText);
+    } else {
+        // Handle no digit found (set invalid digit)
+        recognizedDigits[i] = -1;
+    }
+}
+
+// Step 6: Input the PIN by matching digits with the recognizedDigits array and clicking on correct indexed button
+String pin = "1234";
+for (char ch : pin.toCharArray()) {
+    int targetDigit = Character.getNumericValue(ch);
+    boolean digitClicked = false;
+    
+    for (int i = 0; i < recognizedDigits.length; i++) {
+        if (recognizedDigits[i] == targetDigit) {
+            keypadImages.get(i).click();
+            digitClicked = true;
+            break;
+        }
+    }
+    
+    if (!digitClicked) {
+        throw new RuntimeException("Digit " + targetDigit + " not found on keypad.");
+    }
+    // Optional: Add wait after each click for UI responsiveness
+    Thread.sleep(200);
+}
+
+// Helper method to decode Base64 to BufferedImage (same as described earlier)
+BufferedImage decodeBase64ToImage(String base64) {
+    byte[] imageBytes = Base64.getDecoder().decode(base64.split(",")[1]);
+    ByteArrayInputStream bis = new ByteArrayInputStream(imageBytes);
+    return ImageIO.read(bis);
+}
+--------------------------------------------------------------------------------------------------------------------
+
+import com.microsoft.playwright.*;
+import net.sourceforge.tess4j.Tesseract;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.util.Base64;
+import java.util.List;
+
+public class KeypadAutomation {
+
+    public static void main(String[] args) throws Exception {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            Page page = browser.newPage();
+
+            // Step 1: Navigate to keypad page
+            page.navigate("url_of_application_with_keypad");
+
+            // Step 2: Select all keypad image elements with class pattern 'uia-pin-'
+            Locator imagesLocator = page.locator("img[class^='uia-pin-']");
+            int count = imagesLocator.count();
+
+            // Step 3: Retrieve base64 src strings into an array
+            String[] base64Images = new String[count];
+            for (int i = 0; i < count; i++) {
+                base64Images[i] = imagesLocator.nth(i).getAttribute("src");
+            }
+
+            // Step 4: Setup Tesseract OCR engine (tess4J)
+            Tesseract tesseract = new Tesseract();
+            tesseract.setDatapath("Path_to_tessdata");  // Set correctly
+            tesseract.setLanguage("eng");
+
+            // Step 5: Extract digits from each image using OCR
+            int[] recognizedDigits = new int[count];
+
+            for (int i = 0; i < count; i++) {
+                BufferedImage bufferedImage = decodeBase64ToBufferedImage(base64Images[i]);
+                String ocrResult = tesseract.doOCR(bufferedImage);
+                String cleanedDigits = ocrResult.replaceAll("[^0-9]", "").trim();
+
+                if (!cleanedDigits.isEmpty()) {
+                    recognizedDigits[i] = Integer.parseInt(cleanedDigits);
+                } else {
+                    recognizedDigits[i] = -1;  // No digit found
+                }
+            }
+
+            // Step 6: Define the PIN to enter
+            String pin = "1234";
+
+            // Step 7: For each digit in PIN, find matching button by recognizedDigits array index and click
+            for (char ch : pin.toCharArray()) {
+                int digit = Character.getNumericValue(ch);
+                boolean clicked = false;
+
+                for (int i = 0; i < recognizedDigits.length; i++) {
+                    if (recognizedDigits[i] == digit) {
+                        imagesLocator.nth(i).click();
+                        clicked = true;
+                        break;
+                    }
+                }
+
+                if (!clicked) {
+                    throw new RuntimeException("Digit " + digit + " not found on keypad.");
+                }
+
+                // Optional: wait for UI response/stability
+                page.waitForTimeout(200);
+            }
+
+            // Cleanup
+            browser.close();
+        }
+    }
+
+    // Helper method: Convert base64 to BufferedImage
+    private static BufferedImage decodeBase64ToBufferedImage(String base64Image) throws IOException {
+        String base64Data = base64Image.split(",")[1];  // Strip data:image prefix
+        byte[] imageBytes = Base64.getDecoder().decode(base64Data);
+        try (ByteArrayInputStream bis = new ByteArrayInputStream(imageBytes)) {
+            return ImageIO.read(bis);
+        }
+    }
+}

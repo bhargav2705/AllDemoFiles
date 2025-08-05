@@ -1,0 +1,231 @@
+New Approach for keypad automation.
+
+import com.microsoft.playwright.*;
+import com.microsoft.playwright.options.*;
+import org.opencv.core.*;
+import org.opencv.imgcodecs.Imgcodecs;
+import org.opencv.imgproc.Imgproc;
+import org.opencv.highgui.HighGui; // Or another way to load images
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class KeypadAutomation {
+
+    public static void main(String[] args) {
+        // Load OpenCV native library
+        nu.pattern.OpenCV.loadShared();
+
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            BrowserContext context = browser.newContext();
+            Page page = context.newPage();
+
+            // Navigate to the page with the keypad
+            page.navigate("https://your-website-with-keypad.com"); 
+
+            // 1. Get the list of keypad image elements
+            // Find a reliable parent element for the keypad.
+            // Example: A div with a specific class or id.
+            Locator keypadImages = page.locator(".keypad-container img");
+
+            // 2. Create a map to store the digit-to-locator mapping
+            Map<String, Locator> digitToLocatorMap = new HashMap<>();
+
+            // 3. Prepare your digit templates (these should be stored as image files)
+            // Example: templates/0.png, templates/1.png, ..., templates/9.png
+            Map<String, Mat> digitTemplates = loadDigitTemplates();
+
+            // 4. Iterate through the images and identify them
+            for (int i = 0; i < keypadImages.count(); i++) {
+                Locator keypadImage = keypadImages.nth(i);
+                String src = keypadImage.getAttribute("src");
+                
+                // Check if the src is a base64 string
+                if (src.startsWith("data:image")) {
+                    String base64Data = src.substring(src.indexOf(",") + 1);
+                    byte[] imageBytes = Base64.getDecoder().decode(base64Data);
+
+                    // Decode the image and identify the digit using OpenCV
+                    String identifiedDigit = identifyDigit(imageBytes, digitTemplates);
+                    
+                    if (identifiedDigit != null) {
+                        System.out.println("Identified digit: " + identifiedDigit);
+                        digitToLocatorMap.put(identifiedDigit, keypadImage);
+                    }
+                }
+            }
+
+            // 5. Enter the access code
+            String accessCode = "123456";
+            for (char digitChar : accessCode.toCharArray()) {
+                String digit = String.valueOf(digitChar);
+                Locator buttonToClick = digitToLocatorMap.get(digit);
+                if (buttonToClick != null) {
+                    System.out.println("Clicking button for digit: " + digit);
+                    buttonToClick.click();
+                } else {
+                    System.err.println("Could not find locator for digit: " + digit);
+                }
+            }
+            
+            // Wait for some action after entering the code
+            page.waitForTimeout(5000); 
+
+            // Close resources
+            browser.close();
+            
+        } catch (PlaywrightException | IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static Map<String, Mat> loadDigitTemplates() throws IOException {
+        // Load your template images (e.g., 0.png, 1.png, etc.)
+        Map<String, Mat> templates = new HashMap<>();
+        for (int i = 0; i <= 9; i++) {
+            File templateFile = new File("templates/" + i + ".png");
+            if (templateFile.exists()) {
+                Mat template = Imgcodecs.imread(templateFile.getAbsolutePath(), Imgcodecs.IMREAD_GRAYSCALE);
+                templates.put(String.valueOf(i), template);
+            } else {
+                throw new IOException("Template file not found: " + templateFile.getAbsolutePath());
+            }
+        }
+        return templates;
+    }
+
+    private static String identifyDigit(byte[] imageBytes, Map<String, Mat> digitTemplates) throws IOException {
+        // Save the byte array to a temporary file to be read by OpenCV
+        File tempFile = File.createTempFile("keypad-image", ".png");
+        try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+            fos.write(imageBytes);
+        }
+
+        Mat keypadImage = Imgcodecs.imread(tempFile.getAbsolutePath(), Imgcodecs.IMREAD_GRAYSCALE);
+        if (keypadImage.empty()) {
+            System.err.println("Failed to load keypad image from byte array.");
+            return null;
+        }
+
+        double maxScore = -1;
+        String bestMatch = null;
+
+        // Iterate through templates and perform template matching
+        for (Map.Entry<String, Mat> entry : digitTemplates.entrySet()) {
+            String digit = entry.getKey();
+            Mat template = entry.getValue();
+
+            if (template.empty()) {
+                System.err.println("Template for digit " + digit + " is empty.");
+                continue;
+            }
+
+            // Create a result matrix
+            int resultCols = keypadImage.cols() - template.cols() + 1;
+            int resultRows = keypadImage.rows() - template.rows() + 1;
+            Mat result = new Mat(resultRows, resultCols, CvType.CV_32FC1);
+
+            // Perform template matching
+            Imgproc.matchTemplate(keypadImage, template, result, Imgproc.TM_CCOEFF_NORMED);
+
+            // Find the maximum value in the result matrix
+            Core.MinMaxLocResult mmr = Core.minMaxLoc(result);
+            double currentScore = mmr.maxVal;
+
+            // If this score is higher than the previous max, it's the new best match
+            if (currentScore > maxScore) {
+                maxScore = currentScore;
+                bestMatch = digit;
+            }
+        }
+        
+        // Clean up temp file
+        tempFile.delete();
+
+        // You might want a threshold here to avoid false positives
+        // e.g., if (maxScore > 0.85) return bestMatch;
+        return bestMatch;
+    }
+}
+-------------------------------------------------------------------------------------------------------------------------------
+
+import com.microsoft.playwright.*;
+import net.sourceforge.tess4j.ITesseract;
+import net.sourceforge.tess4j.Tesseract;
+import net.sourceforge.tess4j.TesseractException;
+import org.apache.commons.io.FileUtils;
+
+import java.io.File;
+import java.util.*;
+import java.util.Base64;
+
+public class DynamicKeypadWithOCR {
+
+    public static void main(String[] args) throws Exception {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(
+                    new BrowserType.LaunchOptions().setHeadless(false)
+            );
+
+            Page page = browser.newPage();
+            page.navigate("https://your-app.com/keypad"); // replace with actual URL
+
+            String pin = "4932";
+
+            // Tesseract OCR setup
+            ITesseract tesseract = new Tesseract();
+            tesseract.setDatapath("C:/Program Files/Tesseract-OCR/tessdata"); // Update path if needed
+            tesseract.setLanguage("eng");
+            tesseract.setTessVariable("tessedit_char_whitelist", "0123456789");
+
+            // All keypad images with uia-pin-* classes
+            Locator keypadButtons = page.locator("img[class^='uia-pin-']");
+
+            Map<String, Locator> digitToButton = new HashMap<>();
+            int total = keypadButtons.count();
+
+            for (int i = 0; i < total; i++) {
+                Locator button = keypadButtons.nth(i);
+                String classAttr = button.getAttribute("class"); // e.g. uia-pin-7
+                String base64 = button.getAttribute("src").split(",")[1];
+
+                byte[] imageBytes = Base64.getDecoder().decode(base64);
+                File tempImage = new File("digit_" + i + ".png");
+                FileUtils.writeByteArrayToFile(tempImage, imageBytes);
+
+                String digit = "";
+                try {
+                    digit = tesseract.doOCR(tempImage).replaceAll("[^0-9]", "").trim();
+                    if (!digit.isEmpty() && !digitToButton.containsKey(digit)) {
+                        digitToButton.put(digit, button);
+                        System.out.println("Mapped digit '" + digit + "' to class '" + classAttr + "'");
+                    }
+                } catch (TesseractException e) {
+                    System.out.println("OCR failed on button " + classAttr);
+                }
+
+                tempImage.delete(); // cleanup
+            }
+
+            // Click the digits of the PIN using the OCR-based map
+            for (char d : pin.toCharArray()) {
+                String digit = String.valueOf(d);
+                Locator btn = digitToButton.get(digit);
+                if (btn != null) {
+                    btn.click();
+                    System.out.println("Clicked digit: " + digit);
+                } else {
+                    System.err.println("Digit '" + digit + "' not found in mapping!");
+                }
+            }
+
+            // browser.close(); // optional
+        }
+    }
+}

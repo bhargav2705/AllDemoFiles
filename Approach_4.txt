@@ -1,0 +1,204 @@
+List<String> referenceBase64Digits = ...; // Your known digit image base64 strings (0-9)
+
+Map<Integer, Locator> digitToLocator = new HashMap<>();
+Locator keypadImages = page.locator("img[class^='uia-pin-']");
+int count = keypadImages.count();
+
+for (int i = 0; i < count; i++) {
+    Locator img = keypadImages.nth(i);
+    String srcBase64 = img.getAttribute("src");
+    int matchedDigit = findMatchingDigit(srcBase64, referenceBase64Digits); // implement image/base64 comparison logic
+    digitToLocator.put(matchedDigit, img);
+}
+
+// Enter the PIN
+String pin = "1234";
+for (char c : pin.toCharArray()) {
+    int digit = Character.getNumericValue(c);
+    Locator digitButton = digitToLocator.get(digit);
+    digitButton.click();
+}
+-----------------------------------------------------------------------------------------------------------------------------------------
+
+// references: Map<Integer, String> where key is digit (0-9), value is base64 string
+int findMatchingDigit(String candidateBase64, Map<Integer, String> references) {
+    for (Map.Entry<Integer, String> entry : references.entrySet()) {
+        if (candidateBase64.equals(entry.getValue())) {
+            return entry.getKey();
+        }
+    }
+    throw new RuntimeException("No matching digit found for the candidate image");
+}
+
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+int findMatchingDigit(String candidateBase64, Map<Integer, String> references) {
+    BufferedImage candidateImage = decodeBase64ToImage(candidateBase64);
+
+    for (Map.Entry<Integer, String> entry : references.entrySet()) {
+        BufferedImage referenceImage = decodeBase64ToImage(entry.getValue());
+        if (imagesAreSimilar(candidateImage, referenceImage)) {
+            return entry.getKey();
+        }
+    }
+    throw new RuntimeException("No matching digit found for the candidate image");
+}
+
+// Helper to decode base64 string to an image
+BufferedImage decodeBase64ToImage(String base64) {
+    byte[] imageBytes = Base64.getDecoder().decode(base64.split(",")[1]); // Strip data:image/... part if needed
+    ByteArrayInputStream bis = new ByteArrayInputStream(imageBytes);
+    return ImageIO.read(bis);
+}
+
+// Helper to compare two images pixel-by-pixel
+boolean imagesAreSimilar(BufferedImage img1, BufferedImage img2) {
+    if (img1.getWidth() != img2.getWidth() || img1.getHeight() != img2.getHeight()) return false;
+    for (int x = 0; x < img1.getWidth(); x++) {
+        for (int y = 0; y < img1.getHeight(); y++) {
+            if (img1.getRGB(x, y) != img2.getRGB(x, y)) return false;
+        }
+    }
+    return true;
+}
+--------------------------------------------------------------------------------------------------------------------------------------------------
+Here's the pseudo-code for automating the keypad entry using Playwright Java and Tesseract, based on the concepts discussed in the video and adapted for a Java environment:
+
+```
+// Pseudo-code for Playwright Java Automation with Tesseract OCR
+
+// --- Prerequisites & Setup (Outside of the main automation logic) ---
+
+// 1. Install Tesseract OCR engine on your system.
+//    (e.g., `brew install tesseract` on macOS, or Windows installer)
+
+// 2. Download Tesseract language data files (e.g., 'eng.traineddata')
+//    and place them in a known directory (e.g., C:/tessdata or /usr/local/share/tessdata).
+
+// 3. Add Tess4J (Java wrapper for Tesseract) dependency to your project (Maven/Gradle).
+//    (e.g., Maven: net.sourceforge.tess4j:tess4j:VERSION)
+
+// --- Main Automation Logic ---
+
+// Import necessary Playwright and Tess4J classes
+IMPORT com.microsoft.playwright.*
+IMPORT net.sourceforge.tess4j.Tesseract
+IMPORT java.awt.image.BufferedImage
+IMPORT java.io.ByteArrayInputStream
+IMPORT java.util.Base64
+IMPORT java.util.Map
+IMPORT java.util.HashMap
+
+CLASS KeypadAutomationWithOCR:
+
+    // Declare a static Tesseract instance
+    STATIC Tesseract tesseractInstance
+
+    METHOD main(String[] args):
+        TRY:
+            // Initialize Playwright
+            Playwright playwright = Playwright.create()
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(FALSE))
+            BrowserContext context = browser.newContext()
+            Page page = context.newPage()
+
+            // Navigate to the web page containing the dynamic keypad
+            page.navigate("https://your-application-url.com/keypad")
+
+            // Initialize Tesseract instance (once per run)
+            tesseractInstance = new Tesseract()
+            // Set the path to your tessdata directory
+            tesseractInstance.setDatapath("/path/to/your/tessdata")
+            // Optional: Set language if not English, e.g., "fra" for French
+            tesseractInstance.setLanguage("eng")
+            // Optional: Whitelist characters to improve accuracy for digits only
+            tesseractInstance.setTessVariable("tessedit_char_whitelist", "0123456789")
+
+
+            // 1. Locate all image elements that represent keypad buttons
+            //    (Assumes a common parent or selector for all keypad images)
+            Locator keypadImageElements = page.locator(".keypad-container img")
+
+            // Create a map to store the identified digit and its corresponding Playwright Locator
+            Map<String, Locator> digitToLocatorMap = new HashMap<>()
+
+            // 2. Iterate through each keypad image element
+            FOR int i = 0 TO keypadImageElements.count() - 1:
+                Locator currentImageElement = keypadImageElements.nth(i)
+
+                // 3. Extract the base64 encoded image data from the 'src' attribute
+                String imageSrc = currentImageElement.getAttribute("src")
+
+                IF imageSrc.startsWith("data:image"):
+                    String base64Data = imageSrc.substring(imageSrc.indexOf(",") + 1)
+
+                    // 4. Decode the base64 string into a byte array
+                    byte[] imageBytes = Base64.getDecoder().decode(base64Data)
+
+                    // 5. Convert byte array to BufferedImage for Tesseract
+                    BufferedImage image = ImageIO.read(new ByteArrayInputStream(imageBytes))
+
+                    // --- Optional: Image Preprocessing for better OCR results ---
+                    // IF image quality is poor (e.g., low contrast, noise):
+                    //    BufferedImage preprocessedImage = applyImagePreprocessing(image)
+                    //    String identifiedText = tesseractInstance.doOCR(preprocessedImage)
+                    // ELSE:
+                    String identifiedText = tesseractInstance.doOCR(image)
+
+                    // 6. Process the OCR result
+                    IF identifiedText IS NOT NULL AND NOT identifiedText.trim().isEmpty():
+                        String recognizedDigit = identifiedText.trim()
+                        // Ensure it's a single digit (Tesseract might pick up noise)
+                        IF recognizedDigit.length() == 1 AND Character.isDigit(recognizedDigit.charAt(0)):
+                            digitToLocatorMap.put(recognizedDigit, currentImageElement)
+                            PRINT "Identified digit: " + recognizedDigit + " for element at index " + i
+                        END IF
+                    END IF
+                END IF
+            END FOR
+
+            // 7. Define the access code to enter
+            String accessCode = "12345" // Example access code
+
+            // 8. Iterate through the access code and click the corresponding keypad buttons
+            FOR char digitChar IN accessCode.toCharArray():
+                String digit = String.valueOf(digitChar)
+                Locator buttonToClick = digitToLocatorMap.get(digit)
+
+                IF buttonToClick IS NOT NULL:
+                    PRINT "Clicking button for digit: " + digit
+                    buttonToClick.click()
+                    // Optional: Add a small delay between clicks if needed for UI stability
+                    page.waitForTimeout(200)
+                ELSE:
+                    PRINT_ERROR "Could not find keypad button for digit: " + digit
+            END FOR
+
+            // Optional: Wait for a few seconds to observe the result
+            page.waitForTimeout(5000)
+
+            // Close the browser
+            browser.close()
+
+        CATCH PlaywrightException e:
+            e.printStackTrace()
+        CATCH IOException e:
+            e.printStackTrace()
+        CATCH TesseractException e:
+            e.printStackTrace()
+        FINALLY:
+            // Ensure Playwright resources are closed even if errors occur
+            IF playwright IS NOT NULL:
+                playwright.close()
+            END IF
+        END TRY
+    END METHOD
+
+    // Optional: Helper method for image preprocessing (e.g., binarization, resizing)
+    // METHOD applyImagePreprocessing(BufferedImage originalImage):
+    //    // Implement image processing logic here (e.g., using AWT or external libraries)
+    //    RETURN processedImage
+    // END METHOD
+
+END CLASS
+```

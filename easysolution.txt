@@ -1,0 +1,63 @@
+List<String> referenceBase64Digits = ...; // Your known digit image base64 strings (0-9)
+
+Map<Integer, Locator> digitToLocator = new HashMap<>();
+Locator keypadImages = page.locator("img[class^='uia-pin-']");
+int count = keypadImages.count();
+
+for (int i = 0; i < count; i++) {
+    Locator img = keypadImages.nth(i);
+    String srcBase64 = img.getAttribute("src");
+    int matchedDigit = findMatchingDigit(srcBase64, referenceBase64Digits); // implement image/base64 comparison logic
+    digitToLocator.put(matchedDigit, img);
+}
+
+// Enter the PIN
+String pin = "1234";
+for (char c : pin.toCharArray()) {
+    int digit = Character.getNumericValue(c);
+    Locator digitButton = digitToLocator.get(digit);
+    digitButton.click();
+}
+-----------------------------------------------------------------------------------------------------------------------------------------
+
+// references: Map<Integer, String> where key is digit (0-9), value is base64 string
+int findMatchingDigit(String candidateBase64, Map<Integer, String> references) {
+    for (Map.Entry<Integer, String> entry : references.entrySet()) {
+        if (candidateBase64.equals(entry.getValue())) {
+            return entry.getKey();
+        }
+    }
+    throw new RuntimeException("No matching digit found for the candidate image");
+}
+
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+int findMatchingDigit(String candidateBase64, Map<Integer, String> references) {
+    BufferedImage candidateImage = decodeBase64ToImage(candidateBase64);
+
+    for (Map.Entry<Integer, String> entry : references.entrySet()) {
+        BufferedImage referenceImage = decodeBase64ToImage(entry.getValue());
+        if (imagesAreSimilar(candidateImage, referenceImage)) {
+            return entry.getKey();
+        }
+    }
+    throw new RuntimeException("No matching digit found for the candidate image");
+}
+
+// Helper to decode base64 string to an image
+BufferedImage decodeBase64ToImage(String base64) {
+    byte[] imageBytes = Base64.getDecoder().decode(base64.split(",")[1]); // Strip data:image/... part if needed
+    ByteArrayInputStream bis = new ByteArrayInputStream(imageBytes);
+    return ImageIO.read(bis);
+}
+
+// Helper to compare two images pixel-by-pixel
+boolean imagesAreSimilar(BufferedImage img1, BufferedImage img2) {
+    if (img1.getWidth() != img2.getWidth() || img1.getHeight() != img2.getHeight()) return false;
+    for (int x = 0; x < img1.getWidth(); x++) {
+        for (int y = 0; y < img1.getHeight(); y++) {
+            if (img1.getRGB(x, y) != img2.getRGB(x, y)) return false;
+        }
+    }
+    return true;
+}
