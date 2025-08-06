@@ -1,0 +1,577 @@
+import com.microsoft.playwright.*;
+import com.microsoft.playwright.options.WaitForSelectorState;
+import net.sourceforge.tess4j.Tesseract;
+import net.sourceforge.tess4j.TesseractException;
+import net.sourceforge.tess4j.util.LoadLibs;
+
+import javax.imageio.ImageIO;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+import java.util.List;
+import java.util.regex.Pattern;
+
+public class TesseractKeypadAutomation {
+    
+    private final Page page;
+    private final Tesseract tesseract;
+    private static final String KEYPAD_SELECTOR = ".key-cell-pin";
+    private static final Pattern DIGIT_PATTERN = Pattern.compile("^[0-9]$");
+    
+    public TesseractKeypadAutomation(Page page) {
+        this.page = page;
+        this.tesseract = initializeTesseract();
+    }
+    
+    /**
+     * Initialize Tesseract with optimized settings for digit recognition
+     */
+    private Tesseract initializeTesseract() {
+        try {
+            Tesseract tess = new Tesseract();
+            
+            // Try to use bundled tessdata, fallback to system installation
+            try {
+                File tessDataFolder = LoadLibs.extractTessResources("tessdata");
+                tess.setDatapath(tessDataFolder.getAbsolutePath());
+            } catch (Exception e) {
+                // Fallback to system tessdata
+                String tessDataPath = System.getenv("TESSDATA_PREFIX");
+                if (tessDataPath != null) {
+                    tess.setDatapath(tessDataPath);
+                } else {
+                    // Try common installation paths
+                    String[] commonPaths = {
+                        "/usr/share/tessdata",
+                        "/usr/local/share/tessdata",
+                        "C:\\Program Files\\Tesseract-OCR\\tessdata",
+                        "tessdata"
+                    };
+                    
+                    for (String path : commonPaths) {
+                        File tessDir = new File(path);
+                        if (tessDir.exists() && tessDir.isDirectory()) {
+                            tess.setDatapath(path);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // Configure Tesseract for digit recognition
+            tess.setLanguage("eng");
+            tess.setPageSegMode(8); // PSM_SINGLE_CHAR - treat image as single character
+            tess.setOcrEngineMode(1); // OEM_LSTM_ONLY - use LSTM OCR engine
+            
+            // Set variables for better digit recognition
+            tess.setVariable("tessedit_char_whitelist", "0123456789");
+            tess.setVariable("classify_bln_numeric_mode", "1");
+            tess.setVariable("tessedit_write_images", "false");
+            
+            System.out.println("Tesseract initialized successfully");
+            return tess;
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize Tesseract: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Main method to enter PIN using Tesseract OCR
+     */
+    public void enterPin(String pin) {
+        try {
+            System.out.println("Entering PIN using Tesseract OCR: " + "*".repeat(pin.length()));
+            
+            // Wait for keypad to load
+            waitForKeypadToLoad();
+            
+            // Build digit mapping using OCR
+            Map<String, ElementHandle> digitMapping = buildDigitMappingWithOCR();
+            
+            // Validate mapping
+            validateDigitMapping(digitMapping, pin);
+            
+            // Enter each digit
+            for (char digitChar : pin.toCharArray()) {
+                String digit = String.valueOf(digitChar);
+                ElementHandle button = digitMapping.get(digit);
+                
+                if (button == null) {
+                    throw new RuntimeException("Could not find button for digit: " + digit);
+                }
+                
+                clickDigitButton(button, digit);
+                Thread.sleep(300); // Human-like delay
+            }
+            
+            System.out.println("PIN entered successfully using Tesseract OCR!");
+            
+            // Clean up debug images after successful PIN entry
+            cleanupDebugImages();
+            
+        } catch (Exception e) {
+            // Clean up debug images even if PIN entry fails
+            cleanupDebugImages();
+            throw new RuntimeException("Failed to enter PIN: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Wait for keypad to be fully loaded
+     */
+    private void waitForKeypadToLoad() {
+        try {
+            page.waitForSelector("ing-keypad", new Page.WaitForSelectorOptions()
+                .setState(WaitForSelectorState.VISIBLE)
+                .setTimeout(10000));
+            
+            page.waitForSelector(KEYPAD_SELECTOR, new Page.WaitForSelectorOptions()
+                .setState(WaitForSelectorState.VISIBLE)
+                .setTimeout(5000));
+            
+            // Wait for all images to be fully loaded
+            page.waitForFunction("() => {" +
+                "const images = document.querySelectorAll('.key-cell-pin img');" +
+                "return Array.from(images).every(img => img.complete && img.naturalWidth > 0);" +
+            "}", new Page.WaitForFunctionOptions().setTimeout(5000));
+            
+            System.out.println("Keypad loaded successfully");
+            
+        } catch (PlaywrightException e) {
+            throw new RuntimeException("Keypad failed to load within timeout", e);
+        }
+    }
+    
+    /**
+     * Build digit mapping using Tesseract OCR
+     */
+    private Map<String, ElementHandle> buildDigitMappingWithOCR() {
+        Map<String, ElementHandle> mapping = new HashMap<>();
+        List<ElementHandle> buttons = page.querySelectorAll(KEYPAD_SELECTOR);
+        
+        System.out.println("Found " + buttons.size() + " keypad buttons, starting OCR recognition...");
+        
+        for (int i = 0; i < buttons.size(); i++) {
+            ElementHandle button = buttons.get(i);
+            try {
+                String recognizedDigit = recognizeDigitWithTesseract(button, i);
+                
+                if (recognizedDigit != null && DIGIT_PATTERN.matcher(recognizedDigit).matches()) {
+                    if (mapping.containsKey(recognizedDigit)) {
+                        System.out.println("Warning: Duplicate digit found: " + recognizedDigit);
+                        // Try to resolve conflict by re-analyzing with enhanced preprocessing
+                        String reAnalyzed = reAnalyzeWithEnhancedPreprocessing(button, i);
+                        if (reAnalyzed != null && !reAnalyzed.equals(recognizedDigit)) {
+                            recognizedDigit = reAnalyzed;
+                        }
+                    }
+                    
+                    mapping.put(recognizedDigit, button);
+                    System.out.println("Successfully mapped digit '" + recognizedDigit + "' (button " + i + ")");
+                } else {
+                    System.out.println("Could not recognize valid digit from button " + i + 
+                                     " (result: '" + recognizedDigit + "')");
+                }
+                
+            } catch (Exception e) {
+                System.err.println("Error processing button " + i + ": " + e.getMessage());
+            }
+        }
+        
+        return mapping;
+    }
+    
+    /**
+     * Recognize digit using Tesseract OCR
+     */
+    private String recognizeDigitWithTesseract(ElementHandle button, int buttonIndex) {
+        try {
+            // Get base64 image data
+            ElementHandle imgElement = button.querySelector("img");
+            if (imgElement == null) {
+                return null;
+            }
+            
+            String src = imgElement.getAttribute("src");
+            if (src == null || !src.startsWith("data:image/")) {
+                return null;
+            }
+            
+            // Decode base64 image
+            String base64Data = extractBase64Data(src);
+            BufferedImage originalImage = decodeBase64Image(base64Data);
+            
+            // Save original image for debugging
+            saveDebugImage(originalImage, "original_" + buttonIndex);
+            
+            // Apply basic preprocessing without scaling
+            BufferedImage processedImage = preprocessImage(originalImage);
+            saveDebugImage(processedImage, "processed_" + buttonIndex);
+            
+            String result = performOCRRecognition(processedImage);
+            
+            if (result != null && DIGIT_PATTERN.matcher(result).matches()) {
+                System.out.println("Successfully recognized digit '" + result + "' (button " + buttonIndex + ")");
+                return result;
+            }
+            
+            return null;
+            
+        } catch (Exception e) {
+            System.err.println("Error in Tesseract recognition for button " + buttonIndex + ": " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Enhanced preprocessing for conflict resolution
+     */
+    private String reAnalyzeWithEnhancedPreprocessing(ElementHandle button, int buttonIndex) {
+        try {
+            ElementHandle imgElement = button.querySelector("img");
+            String src = imgElement.getAttribute("src");
+            String base64Data = extractBase64Data(src);
+            BufferedImage originalImage = decodeBase64Image(base64Data);
+            
+            // Apply enhanced preprocessing with different parameters
+            BufferedImage enhancedImage = preprocessImageEnhanced(originalImage);
+            saveDebugImage(enhancedImage, "reanalysis_" + buttonIndex);
+            
+            return performOCRRecognition(enhancedImage);
+            
+        } catch (Exception e) {
+            System.err.println("Error in re-analysis: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Basic image preprocessing without scaling
+     */
+    private BufferedImage preprocessImage(BufferedImage original) {
+        int width = original.getWidth();
+        int height = original.getHeight();
+        
+        BufferedImage processed = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = processed.createGraphics();
+        
+        // Apply anti-aliasing for smoother edges
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        
+        // Draw original image
+        g2d.drawImage(original, 0, 0, null);
+        g2d.dispose();
+        
+        // Apply contrast enhancement
+        return enhanceContrast(processed);
+    }
+    
+    /**
+     * Enhanced image preprocessing for reanalysis
+     */
+    private BufferedImage preprocessImageEnhanced(BufferedImage original) {
+        int width = original.getWidth();
+        int height = original.getHeight();
+        
+        BufferedImage processed = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = processed.createGraphics();
+        
+        // Apply different rendering hints for enhanced quality
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        
+        g2d.drawImage(original, 0, 0, null);
+        g2d.dispose();
+        
+        // Apply stronger contrast enhancement
+        BufferedImage contrasted = enhanceContrast(processed);
+        return convertToGrayscale(contrasted);
+    }
+    
+    /**
+     * Enhance image contrast
+     */
+    private BufferedImage enhanceContrast(BufferedImage image) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+        
+        BufferedImage enhanced = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                int rgb = image.getRGB(x, y);
+                
+                int r = (rgb >> 16) & 0xFF;
+                int g = (rgb >> 8) & 0xFF;
+                int b = rgb & 0xFF;
+                
+                // Apply contrast enhancement
+                r = Math.min(255, Math.max(0, (int) ((r - 128) * 1.5 + 128)));
+                g = Math.min(255, Math.max(0, (int) ((g - 128) * 1.5 + 128)));
+                b = Math.min(255, Math.max(0, (int) ((b - 128) * 1.5 + 128)));
+                
+                enhanced.setRGB(x, y, (r << 16) | (g << 8) | b);
+            }
+        }
+        
+        return enhanced;
+    }
+    
+    /**
+     * Convert image to grayscale
+     */
+    private BufferedImage convertToGrayscale(BufferedImage image) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+        
+        BufferedImage grayscale = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D g2d = grayscale.createGraphics();
+        g2d.drawImage(image, 0, 0, null);
+        g2d.dispose();
+        
+        return grayscale;
+    }
+    
+    /**
+     * Clean up all debug images after PIN entry completion
+     */
+    private void cleanupDebugImages() {
+        try {
+            File debugDir = new File("debug_images");
+            if (debugDir.exists() && debugDir.isDirectory()) {
+                File[] files = debugDir.listFiles();
+                if (files != null) {
+                    int deletedCount = 0;
+                    for (File file : files) {
+                        if (file.isFile() && (file.getName().endsWith(".png") || file.getName().endsWith(".jpg"))) {
+                            if (file.delete()) {
+                                deletedCount++;
+                            } else {
+                                System.out.println("Could not delete: " + file.getName());
+                            }
+                        }
+                    }
+                    System.out.println("Cleaned up " + deletedCount + " debug images");
+                    
+                    // Remove directory if empty
+                    if (debugDir.list().length == 0) {
+                        debugDir.delete();
+                        System.out.println("Removed empty debug_images directory");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error during debug image cleanup: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Alternative cleanup method that only deletes images older than specified time
+     */
+    private void cleanupOldDebugImages(long maxAgeMinutes) {
+        try {
+            File debugDir = new File("debug_images");
+            if (debugDir.exists() && debugDir.isDirectory()) {
+                File[] files = debugDir.listFiles();
+                if (files != null) {
+                    long currentTime = System.currentTimeMillis();
+                    long maxAge = maxAgeMinutes * 60 * 1000; // Convert to milliseconds
+                    int deletedCount = 0;
+                    
+                    for (File file : files) {
+                        if (file.isFile() && (file.getName().endsWith(".png") || file.getName().endsWith(".jpg"))) {
+                            long fileAge = currentTime - file.lastModified();
+                            if (fileAge > maxAge) {
+                                if (file.delete()) {
+                                    deletedCount++;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (deletedCount > 0) {
+                        System.out.println("Cleaned up " + deletedCount + " old debug images (older than " + maxAgeMinutes + " minutes)");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error during old debug image cleanup: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Perform OCR recognition using Tesseract
+     */
+    private String performOCRRecognition(BufferedImage image) {
+        try {
+            String result = tesseract.doOCR(image);
+            
+            if (result != null) {
+                result = result.trim().replaceAll("\\s+", "");
+                
+                // Additional cleaning for common OCR errors
+                result = result.replaceAll("[^0-9]", ""); // Keep only digits
+                
+                if (result.length() == 1 && DIGIT_PATTERN.matcher(result).matches()) {
+                    return result;
+                }
+            }
+            
+            return null;
+            
+        } catch (TesseractException e) {
+            System.err.println("Tesseract OCR failed: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Extract base64 data from data URI
+     */
+    private String extractBase64Data(String dataUri) {
+        if (dataUri.contains(",")) {
+            return dataUri.split(",")[1];
+        }
+        throw new IllegalArgumentException("Invalid data URI format");
+    }
+    
+    /**
+     * Decode base64 string to BufferedImage
+     */
+    private BufferedImage decodeBase64Image(String base64Data) throws IOException {
+        byte[] imageBytes = Base64.getDecoder().decode(base64Data);
+        return ImageIO.read(new ByteArrayInputStream(imageBytes));
+    }
+    
+    /**
+     * Save debug images for troubleshooting
+     */
+    private void saveDebugImage(BufferedImage image, String name) {
+        try {
+            File debugDir = new File("debug_images");
+            if (!debugDir.exists()) {
+                debugDir.mkdirs();
+            }
+            
+            File outputFile = new File(debugDir, name + ".png");
+            ImageIO.write(image, "png", outputFile);
+            
+        } catch (IOException e) {
+            // Silently ignore debug image save errors
+        }
+    }
+    
+    /**
+     * Click digit button
+     */
+    private void clickDigitButton(ElementHandle button, String digit) {
+        try {
+            button.scrollIntoViewIfNeeded();
+            button.waitForElementState(ElementHandle.ElementState.VISIBLE);
+            button.click();
+            
+            System.out.println("Clicked digit: " + digit);
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to click digit " + digit + ": " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Validate digit mapping
+     */
+    private void validateDigitMapping(Map<String, ElementHandle> mapping, String pin) {
+        Set<String> requiredDigits = new HashSet<>();
+        for (char c : pin.toCharArray()) {
+            requiredDigits.add(String.valueOf(c));
+        }
+        
+        Set<String> missingDigits = new HashSet<>(requiredDigits);
+        missingDigits.removeAll(mapping.keySet());
+        
+        if (!missingDigits.isEmpty()) {
+            throw new RuntimeException("Missing required digits for PIN: " + missingDigits);
+        }
+        
+        System.out.println("All required digits found for PIN entry");
+    }
+    
+    /**
+     * Example usage and testing
+     */
+    public static void main(String[] args) {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions()
+                .setHeadless(false)
+                .setSlowMo(1000));
+            
+            Page page = browser.newPage();
+            page.navigate("https://your-banking-app.com/login");
+            page.waitForLoadState();
+            
+            // Create Tesseract-based automation
+            TesseractKeypadAutomation keypadAutomation = new TesseractKeypadAutomation(page);
+            
+            // Enter PIN using OCR
+            keypadAutomation.enterPin("1234");
+            
+            // Note: Debug images will be automatically cleaned up after PIN entry
+            
+            Thread.sleep(3000);
+            browser.close();
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+    
+    /**
+     * Method to enter PIN without automatic cleanup (for debugging purposes)
+     */
+    public void enterPinKeepDebugImages(String pin) {
+        try {
+            System.out.println("Entering PIN using Tesseract OCR (keeping debug images): " + "*".repeat(pin.length()));
+            
+            waitForKeypadToLoad();
+            Map<String, ElementHandle> digitMapping = buildDigitMappingWithOCR();
+            validateDigitMapping(digitMapping, pin);
+            
+            for (char digitChar : pin.toCharArray()) {
+                String digit = String.valueOf(digitChar);
+                ElementHandle button = digitMapping.get(digit);
+                
+                if (button == null) {
+                    throw new RuntimeException("Could not find button for digit: " + digit);
+                }
+                
+                clickDigitButton(button, digit);
+                Thread.sleep(300);
+            }
+            
+            System.out.println("PIN entered successfully! Debug images preserved for inspection.");
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to enter PIN: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Method to manually cleanup debug images when needed
+     */
+    public void manualCleanup() {
+        cleanupDebugImages();
+    }
+    
+    /**
+     * Method to cleanup old debug images (older than specified minutes)
+     */
+    public void cleanupOldImages(long maxAgeMinutes) {
+        cleanupOldDebugImages(maxAgeMinutes);
+    }
+}

@@ -1,0 +1,409 @@
+Claude 1
+
+<dependencies>
+    <!-- Playwright for browser automation -->
+    <dependency>
+        <groupId>com.microsoft.playwright</groupId>
+        <artifactId>playwright</artifactId>
+        <version>1.40.0</version>
+    </dependency>
+    
+    <!-- For image processing -->
+    <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-imaging</artifactId>
+        <version>1.0.0-RC5</version>
+    </dependency>
+    
+    <!-- Optional: Tesseract OCR (if you want to use OCR approach) -->
+    <dependency>
+        <groupId>net.sourceforge.tess4j</groupId>
+        <artifactId>tess4j</artifactId>
+        <version>5.7.0</version>
+    </dependency>
+    
+    <!-- For advanced image processing -->
+    <dependency>
+        <groupId>org.imgscalr</groupId>
+        <artifactId>imgscalr-lib</artifactId>
+        <version>4.2</version>
+    </dependency>
+    
+    <!-- For base64 handling (included in Java 8+, but adding for clarity) -->
+    <dependency>
+        <groupId>commons-codec</groupId>
+        <artifactId>commons-codec</artifactId>
+        <version>1.15</version>
+    </dependency>
+    
+    <!-- For JSON handling if you need to store/load templates -->
+    <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.15.2</version>
+    </dependency>
+</dependencies>
+--------------------------------------------------------------------------------
+
+import com.microsoft.playwright.*;
+import com.microsoft.playwright.options.LoadState;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class DynamicKeypadAutomation {
+    private Page page;
+    private Map<String, String> digitTemplates;
+    private static final String KEYPAD_SELECTOR = "img[src*='data:image']"; // Adjust based on your HTML structure
+    
+    public DynamicKeypadAutomation(Page page) {
+        this.page = page;
+        this.digitTemplates = new HashMap<>();
+        initializeDigitTemplates();
+    }
+    
+    /**
+     * Initialize digit templates by capturing reference images
+     * This should be done once when the keypad first loads with known positions
+     */
+    private void initializeDigitTemplates() {
+        // You'll need to capture reference images for each digit (0-9)
+        // This can be done manually first time or programmatically if you have a reference keypad
+        System.out.println("Initializing digit templates...");
+    }
+    
+    /**
+     * Main method to enter access code on dynamic keypad
+     */
+    public void enterAccessCode(String accessCode) {
+        try {
+            // Wait for keypad to load
+            page.waitForSelector(KEYPAD_SELECTOR, new Page.WaitForSelectorOptions().setTimeout(10000));
+            
+            // Get all keypad button elements
+            List<ElementHandle> keypadButtons = page.querySelectorAll(KEYPAD_SELECTOR);
+            
+            // Create mapping of digits to their current positions
+            Map<String, ElementHandle> digitToElementMap = createDigitMapping(keypadButtons);
+            
+            // Click digits in sequence
+            for (char digit : accessCode.toCharArray()) {
+                String digitStr = String.valueOf(digit);
+                ElementHandle button = digitToElementMap.get(digitStr);
+                
+                if (button != null) {
+                    System.out.println("Clicking digit: " + digit);
+                    button.click();
+                    // Add small delay between clicks if needed
+                    Thread.sleep(500);
+                } else {
+                    throw new RuntimeException("Could not find button for digit: " + digit);
+                }
+            }
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to enter access code: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Create mapping between digits and their current DOM elements
+     */
+    private Map<String, ElementHandle> createDigitMapping(List<ElementHandle> keypadButtons) {
+        Map<String, ElementHandle> mapping = new HashMap<>();
+        
+        for (ElementHandle button : keypadButtons) {
+            try {
+                // Get base64 image data
+                String src = button.getAttribute("src");
+                String base64Data = extractBase64Data(src);
+                
+                // Recognize digit from base64 image
+                String recognizedDigit = recognizeDigitFromBase64(base64Data);
+                
+                if (recognizedDigit != null) {
+                    mapping.put(recognizedDigit, button);
+                    System.out.println("Mapped digit " + recognizedDigit + " to button element");
+                }
+                
+            } catch (Exception e) {
+                System.err.println("Error processing button: " + e.getMessage());
+            }
+        }
+        
+        return mapping;
+    }
+    
+    /**
+     * Extract base64 data from data URL
+     */
+    private String extractBase64Data(String dataUrl) {
+        if (dataUrl != null && dataUrl.startsWith("data:image/")) {
+            String[] parts = dataUrl.split(",");
+            if (parts.length == 2) {
+                return parts[1];
+            }
+        }
+        throw new IllegalArgumentException("Invalid data URL format");
+    }
+    
+    /**
+     * Recognize digit from base64 encoded image
+     * This is where the main logic for digit recognition goes
+     */
+    private String recognizeDigitFromBase64(String base64Data) {
+        try {
+            // Decode base64 to image
+            byte[] imageBytes = Base64.getDecoder().decode(base64Data);
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(imageBytes));
+            
+            // Approach 1: Template matching (if you have reference templates)
+            String templateResult = matchWithTemplates(image);
+            if (templateResult != null) {
+                return templateResult;
+            }
+            
+            // Approach 2: OCR using external service/library
+            String ocrResult = performOCR(image);
+            if (ocrResult != null) {
+                return ocrResult;
+            }
+            
+            // Approach 3: Pixel-based analysis for simple digit recognition
+            String pixelResult = analyzePixelPattern(image);
+            if (pixelResult != null) {
+                return pixelResult;
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Error recognizing digit: " + e.getMessage());
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Template matching approach - compare with known digit templates
+     */
+    private String matchWithTemplates(BufferedImage image) {
+        // Load your pre-captured digit templates
+        Map<String, BufferedImage> templates = loadDigitTemplates();
+        
+        double bestMatch = 0.0;
+        String bestDigit = null;
+        
+        for (Map.Entry<String, BufferedImage> entry : templates.entrySet()) {
+            double similarity = calculateImageSimilarity(image, entry.getValue());
+            
+            if (similarity > bestMatch && similarity > 0.8) { // Threshold for match confidence
+                bestMatch = similarity;
+                bestDigit = entry.getKey();
+            }
+        }
+        
+        return bestDigit;
+    }
+    
+    /**
+     * OCR approach using external OCR service or library
+     * Note: You'll need to add OCR library dependency (like Tesseract)
+     */
+    private String performOCR(BufferedImage image) {
+        try {
+            // Example using Tesseract OCR (you'll need to add tesseract dependency)
+            // Tesseract tesseract = new Tesseract();
+            // tesseract.setDatapath("path/to/tessdata");
+            // tesseract.setLanguage("eng");
+            // String result = tesseract.doOCR(image);
+            
+            // For now, return null - implement based on your OCR choice
+            return null;
+            
+        } catch (Exception e) {
+            System.err.println("OCR failed: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Simple pixel-based digit recognition for basic patterns
+     */
+    private String analyzePixelPattern(BufferedImage image) {
+        try {
+            // Convert to grayscale and analyze patterns
+            int width = image.getWidth();
+            int height = image.getHeight();
+            
+            // Create binary representation
+            boolean[][] pixels = new boolean[height][width];
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int rgb = image.getRGB(x, y);
+                    int gray = (rgb >> 16 & 0xFF) + (rgb >> 8 & 0xFF) + (rgb & 0xFF);
+                    pixels[y][x] = gray < 384; // Threshold for black/white
+                }
+            }
+            
+            // Analyze patterns (this is a simplified example)
+            return analyzeDigitPattern(pixels);
+            
+        } catch (Exception e) {
+            System.err.println("Pixel analysis failed: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Analyze digit patterns from binary pixel data
+     */
+    private String analyzeDigitPattern(boolean[][] pixels) {
+        // This is a simplified pattern recognition
+        // You would implement more sophisticated pattern matching here
+        
+        int height = pixels.length;
+        int width = pixels[0].length;
+        
+        // Count black pixels in different regions
+        int topHalf = countPixelsInRegion(pixels, 0, height/2, 0, width);
+        int bottomHalf = countPixelsInRegion(pixels, height/2, height, 0, width);
+        int leftHalf = countPixelsInRegion(pixels, 0, height, 0, width/2);
+        int rightHalf = countPixelsInRegion(pixels, 0, height, width/2, width);
+        int center = countPixelsInRegion(pixels, height/4, 3*height/4, width/4, 3*width/4);
+        
+        // Simple heuristic-based recognition (you'd want more sophisticated logic)
+        if (center > topHalf + bottomHalf) {
+            if (leftHalf > rightHalf) return "6";
+            else return "9";
+        }
+        
+        // Add more pattern recognition logic here
+        // This is just a basic example
+        
+        return null;
+    }
+    
+    /**
+     * Count black pixels in a specific region
+     */
+    private int countPixelsInRegion(boolean[][] pixels, int startY, int endY, int startX, int endX) {
+        int count = 0;
+        for (int y = startY; y < endY; y++) {
+            for (int x = startX; x < endX; x++) {
+                if (pixels[y][x]) count++;
+            }
+        }
+        return count;
+    }
+    
+    /**
+     * Calculate similarity between two images
+     */
+    private double calculateImageSimilarity(BufferedImage img1, BufferedImage img2) {
+        if (img1.getWidth() != img2.getWidth() || img1.getHeight() != img2.getHeight()) {
+            return 0.0;
+        }
+        
+        int width = img1.getWidth();
+        int height = img1.getHeight();
+        long matchingPixels = 0;
+        long totalPixels = width * height;
+        
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                if (img1.getRGB(x, y) == img2.getRGB(x, y)) {
+                    matchingPixels++;
+                }
+            }
+        }
+        
+        return (double) matchingPixels / totalPixels;
+    }
+    
+    /**
+     * Load digit templates from files
+     */
+    private Map<String, BufferedImage> loadDigitTemplates() {
+        Map<String, BufferedImage> templates = new HashMap<>();
+        
+        try {
+            // Load template images for digits 0-9
+            for (int i = 0; i <= 9; i++) {
+                String digit = String.valueOf(i);
+                String templatePath = "templates/digit_" + digit + ".png";
+                
+                // Try to load from resources or file system
+                File templateFile = new File(templatePath);
+                if (templateFile.exists()) {
+                    BufferedImage template = ImageIO.read(templateFile);
+                    templates.put(digit, template);
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Error loading templates: " + e.getMessage());
+        }
+        
+        return templates;
+    }
+    
+    /**
+     * Utility method to save base64 images for template creation
+     */
+    public void saveDigitTemplate(String base64Data, String digit) {
+        try {
+            byte[] imageBytes = Base64.getDecoder().decode(base64Data);
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(imageBytes));
+            
+            File outputFile = new File("templates/digit_" + digit + ".png");
+            outputFile.getParentFile().mkdirs();
+            ImageIO.write(image, "png", outputFile);
+            
+            System.out.println("Saved template for digit " + digit);
+            
+        } catch (Exception e) {
+            System.err.println("Error saving template: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Alternative approach: Use machine learning model for digit recognition
+     * This would require integrating with a trained model
+     */
+    private String recognizeWithML(BufferedImage image) {
+        // Placeholder for ML-based recognition
+        // You could integrate with TensorFlow Java, DL4J, or call external ML service
+        return null;
+    }
+    
+    /**
+     * Example usage
+     */
+    public static void main(String[] args) {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            Page page = browser.newPage();
+            
+            // Navigate to your application
+            page.navigate("https://your-app-url.com");
+            
+            // Wait for keypad to appear
+            page.waitForLoadState(LoadState.NETWORKIDLE);
+            
+            // Create automation instance
+            DynamicKeypadAutomation keypadAutomation = new DynamicKeypadAutomation(page);
+            
+            // Enter access code
+            keypadAutomation.enterAccessCode("1234");
+            
+            // Close browser
+            browser.close();
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
