@@ -1,0 +1,125 @@
+import com.microsoft.playwright.ElementHandle;
+import com.microsoft.playwright.Locator;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Playwright;
+import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+public class Main {
+    public static void main(String[] args) throws IOException {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch();
+            Page page = browser.newPage();
+            page.navigate("https://your-application-url.com");
+
+            Map<String, ElementHandle> keypadMap = new HashMap<>();
+
+            // Assuming 'allImageLocators' is a locator for all <img> tags
+            Locator allImageLocators = page.locator("div.key-cell-pin img");
+
+            for (int i = 0; i < allImageLocators.count(); i++) {
+                ElementHandle imageHandle = allImageLocators.nth(i).elementHandle();
+
+                // Get the base64 string from the img src attribute
+                String base64ImageData = imageHandle.getAttribute("src");
+
+                // Pre-process the image data
+                BufferedImage preprocessedImage = ImagePreProcessor.preprocessForOcr(base64ImageData);
+
+                // Now, you would pass this preprocessedImage to your Tesseract method.
+                String digitFromOcr = runOcrOnBufferedImage(preprocessedImage); 
+
+                // Put the OCR result and the original ElementHandle into the map
+                keypadMap.put(digitFromOcr, imageHandle);
+            }
+
+            browser.close();
+        }
+    }
+
+    // Your Tesseract OCR method needs to be adapted to accept a BufferedImage
+    // This is a placeholder for your actual implementation
+    public static String runOcrOnBufferedImage(BufferedImage image) {
+        // Your Tesseract logic goes here. Example:
+        // Tesseract tesseract = new Tesseract();
+        // tesseract.setPageSegMode(Tesseract.PSM_SINGLE_CHAR);
+        // tesseract.setTessVariable("tessedit_char_whitelist", "0123456789");
+        // String result = tesseract.doOCR(image);
+        return "5"; // Placeholder return value
+    }
+}
+---------------------------------------------------------------------------------------------------------------------------------------------------
+
+Code for Image Pre-processing
+
+
+import javax.imageio.ImageIO;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.Base64;
+
+public class ImagePreProcessor {
+
+    /**
+     * Pre-processes a base64 encoded image string for optimal Tesseract OCR accuracy.
+     * This method decodes the image, converts it to grayscale, and then binarizes it.
+     *
+     * @param base64ImageData The base64-encoded image string from the img src attribute.
+     * @return A pre-processed BufferedImage ready for OCR.
+     * @throws IOException if an error occurs during image decoding or processing.
+     */
+    public static BufferedImage preprocessForOcr(String base64ImageData) throws IOException {
+        // Step 1: Decode the base64 string into a byte array
+        // The src attribute often has a prefix like "data:image/png;base64,"
+        // We need to remove this prefix before decoding.
+        if (base64ImageData.startsWith("data:")) {
+            base64ImageData = base64ImageData.substring(base64ImageData.indexOf(",") + 1);
+        }
+        byte[] imageBytes = Base64.getDecoder().decode(base64ImageData);
+
+        // Step 2: Read the image from the byte array into a BufferedImage
+        ByteArrayInputStream bis = new ByteArrayInputStream(imageBytes);
+        BufferedImage originalImage = ImageIO.read(bis);
+        bis.close();
+
+        if (originalImage == null) {
+            throw new IOException("Failed to read image from byte array.");
+        }
+
+        // Step 3: Convert the image to grayscale and binarize it
+        BufferedImage processedImage = new BufferedImage(
+            originalImage.getWidth(), 
+            originalImage.getHeight(), 
+            BufferedImage.TYPE_BYTE_BINARY
+        );
+        
+        Graphics2D g2d = processedImage.createGraphics();
+        g2d.drawImage(originalImage, 0, 0, null);
+        g2d.dispose();
+        
+        // This process creates a pure black and white image.
+        // The default threshold for TYPE_BYTE_BINARY is often sufficient.
+        // If you need more control, you could implement a custom binarization loop.
+
+        return processedImage;
+    }
+
+    /**
+     * A utility method to convert a BufferedImage back to a Base64 string for verification.
+     * @param image The BufferedImage to encode.
+     * @return The base64-encoded string.
+     * @throws IOException if an error occurs during encoding.
+     */
+    public static String toBase64(BufferedImage image) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", bos);
+        byte[] bytes = bos.toByteArray();
+        bos.close();
+        return Base64.getEncoder().encodeToString(bytes);
+    }
+}
