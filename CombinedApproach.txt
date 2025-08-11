@@ -1,0 +1,148 @@
+Combined Approacvh
+
+
+
+import com.microsoft.playwright.*;
+import org.opencv.core.*;
+import org.opencv.imgcodecs.Imgcodecs;
+import org.opencv.imgproc.Imgproc;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.util.*;
+import java.util.stream.IntStream;
+
+public class PinAutomationOpenCV {
+    static {
+        // Load OpenCV native library
+        System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
+    }
+
+    private static final String TEMPLATE_DIR = "templates"; // store digit templates here
+
+    public static void main(String[] args) throws IOException {
+        String targetPin = "4837";
+
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            Page page = browser.newPage();
+
+            page.navigate("https://example.com/keypad"); // your keypad page
+
+            // Step 1: Get all keypad buttons
+            List<ElementHandle> keys = page.querySelectorAll("div.key-cell-pin");
+
+            if (templatesExist()) {
+                // Templates already exist → run recognition
+                Map<Integer, Integer> positionToDigit = recognizeDigits(keys);
+                clickPin(page, targetPin, positionToDigit);
+            } else {
+                // No templates → create them (manual one-time labeling)
+                saveTemplates(keys);
+                System.out.println("Templates saved. Please label them manually in 'templates' folder.");
+            }
+
+            // browser.close(); // Uncomment if you want to close browser after execution
+        }
+    }
+
+    /** Check if templates for all digits exist */
+    private static boolean templatesExist() {
+        File dir = new File(TEMPLATE_DIR);
+        if (!dir.exists() || !dir.isDirectory()) return false;
+        long count = Arrays.stream(Objects.requireNonNull(dir.listFiles()))
+                .filter(f -> f.getName().endsWith(".png"))
+                .count();
+        return count >= 10;
+    }
+
+    /** Save keypad images as PNG for manual labeling */
+    private static void saveTemplates(List<ElementHandle> keys) throws IOException {
+        File dir = new File(TEMPLATE_DIR);
+        if (!dir.exists()) dir.mkdirs();
+
+        for (int i = 0; i < keys.size(); i++) {
+            String base64 = keys.get(i).querySelector("img").getAttribute("src").split(",")[1];
+            byte[] imageBytes = Base64.getDecoder().decode(base64);
+            BufferedImage img = ImageIO.read(new ByteArrayInputStream(imageBytes));
+
+            File output = new File(dir, "key_" + i + ".png");
+            ImageIO.write(img, "png", output);
+            System.out.println("Saved: " + output.getAbsolutePath());
+        }
+    }
+
+    /** Recognize keypad digits using OpenCV template matching */
+    private static Map<Integer, Integer> recognizeDigits(List<ElementHandle> keys) throws IOException {
+        Map<Integer, Integer> mapping = new HashMap<>();
+
+        for (int pos = 0; pos < keys.size(); pos++) {
+            String base64 = keys.get(pos).querySelector("img").getAttribute("src").split(",")[1];
+            byte[] imageBytes = Base64.getDecoder().decode(base64);
+            BufferedImage img = ImageIO.read(new ByteArrayInputStream(imageBytes));
+
+            // Convert BufferedImage to Mat
+            Mat keyImg = bufferedImageToMat(img);
+
+            int matchedDigit = matchWithTemplates(keyImg);
+            mapping.put(pos, matchedDigit);
+            System.out.println("Position " + pos + " = Digit " + matchedDigit);
+        }
+        return mapping;
+    }
+
+    /** Match input digit image with stored templates */
+    private static int matchWithTemplates(Mat keyImg) {
+        double bestScore = -1;
+        int bestDigit = -1;
+
+        for (int digit = 0; digit <= 9; digit++) {
+            String templatePath = TEMPLATE_DIR + "/" + digit + ".png";
+            Mat template = Imgcodecs.imread(templatePath, Imgcodecs.IMREAD_GRAYSCALE);
+
+            Mat result = new Mat();
+            Imgproc.matchTemplate(toGray(keyImg), template, result, Imgproc.TM_CCOEFF_NORMED);
+
+            Core.MinMaxLocResult mmr = Core.minMaxLoc(result);
+            if (mmr.maxVal > bestScore) {
+                bestScore = mmr.maxVal;
+                bestDigit = digit;
+            }
+        }
+        return bestDigit;
+    }
+
+    /** Click the PIN digits in correct order */
+    private static void clickPin(Page page, String pin, Map<Integer, Integer> mapping) {
+        for (char ch : pin.toCharArray()) {
+            int digit = Character.getNumericValue(ch);
+            int pos = mapping.entrySet().stream()
+                    .filter(e -> e.getValue() == digit)
+                    .map(Map.Entry::getKey)
+                    .findFirst()
+                    .orElseThrow(() -> new RuntimeException("Digit not found: " + digit));
+            page.querySelectorAll("div.key-cell-pin").get(pos).click();
+        }
+        System.out.println("PIN entered successfully!");
+    }
+
+    /** Convert BufferedImage to OpenCV Mat */
+    private static Mat bufferedImageToMat(BufferedImage bi) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try {
+            ImageIO.write(bi, "png", baos);
+            baos.flush();
+            return Imgcodecs.imdecode(new MatOfByte(baos.toByteArray()), Imgcodecs.IMREAD_COLOR);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Convert Mat to grayscale */
+    private static Mat toGray(Mat img) {
+        Mat gray = new Mat();
+        Imgproc.cvtColor(img, gray, Imgproc.COLOR_BGR2GRAY);
+        return gray;
+    }
+}
