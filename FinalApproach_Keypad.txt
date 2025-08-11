@@ -1,0 +1,291 @@
+// Solution 1: Use position attribute mapping
+public class KeypadAutomation {
+    
+    // Method 1: Position-based approach (most reliable)
+    public void enterPinUsingPosition(Page page, String pin) {
+        // Create a map to store digit positions
+        Map<String, String> digitPositionMap = new HashMap<>();
+        
+        // Get all keypad buttons
+        Locator keypadButtons = page.locator(".key-cell-pin");
+        
+        // Extract position mappings by analyzing the images
+        for (int i = 0; i < keypadButtons.count(); i++) {
+            Locator button = keypadButtons.nth(i);
+            String position = button.getAttribute("position");
+            String base64Src = button.locator("img").getAttribute("src");
+            
+            // Extract and decode the image to identify the digit
+            String digit = identifyDigitFromBase64(base64Src);
+            digitPositionMap.put(digit, position);
+        }
+        
+        // Now enter the PIN using the position mapping
+        for (char digitChar : pin.toCharArray()) {
+            String digit = String.valueOf(digitChar);
+            String position = digitPositionMap.get(digit);
+            
+            if (position != null) {
+                page.locator(".key-cell-pin[position='" + position + "']").click();
+                Thread.sleep(500); // Small delay between clicks
+            }
+        }
+    }
+    
+    // Method 2: OCR with better preprocessing
+    private String identifyDigitFromBase64(String base64Src) {
+        try {
+            // Remove the data URL prefix
+            String base64Data = base64Src.substring(base64Src.indexOf(",") + 1);
+            
+            // Decode base64 to image
+            byte[] imageBytes = Base64.getDecoder().decode(base64Data);
+            ByteArrayInputStream bis = new ByteArrayInputStream(imageBytes);
+            BufferedImage image = ImageIO.read(bis);
+            
+            // Preprocess image for better OCR
+            BufferedImage processedImage = preprocessImageForOCR(image);
+            
+            // Use Tesseract with specific configuration for digits
+            Tesseract tesseract = new Tesseract();
+            tesseract.setDatapath("path/to/tessdata"); // Set your tessdata path
+            tesseract.setLanguage("eng");
+            
+            // Configure for single digit recognition
+            tesseract.setTessVariable("tessedit_char_whitelist", "0123456789");
+            tesseract.setPageSegMode(10); // Single character mode
+            
+            String result = tesseract.doOCR(processedImage).trim();
+            return result.isEmpty() ? "?" : result;
+            
+        } catch (Exception e) {
+            System.err.println("Error processing image: " + e.getMessage());
+            return "?";
+        }
+    }
+    
+    // Image preprocessing for better OCR accuracy
+    private BufferedImage preprocessImageForOCR(BufferedImage original) {
+        // Convert to grayscale
+        BufferedImage grayscale = new BufferedImage(
+            original.getWidth(), original.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D g2d = grayscale.createGraphics();
+        g2d.drawImage(original, 0, 0, null);
+        g2d.dispose();
+        
+        // Scale up the image (OCR works better on larger images)
+        int scaleFactor = 4;
+        BufferedImage scaled = new BufferedImage(
+            grayscale.getWidth() * scaleFactor,
+            grayscale.getHeight() * scaleFactor,
+            BufferedImage.TYPE_BYTE_GRAY);
+        
+        Graphics2D g2dScaled = scaled.createGraphics();
+        g2dScaled.setRenderingHint(RenderingHints.KEY_INTERPOLATION, 
+                                  RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g2dScaled.drawImage(grayscale, 0, 0, scaled.getWidth(), scaled.getHeight(), null);
+        g2dScaled.dispose();
+        
+        return scaled;
+    }
+    
+    // Method 3: Template matching approach
+    public void enterPinUsingTemplateMatching(Page page, String pin) throws IOException {
+        // Load digit templates (you need to create these once)
+        Map<String, BufferedImage> digitTemplates = loadDigitTemplates();
+        Map<String, String> digitPositionMap = new HashMap<>();
+        
+        // Get all keypad buttons
+        Locator keypadButtons = page.locator(".key-cell-pin");
+        
+        for (int i = 0; i < keypadButtons.count(); i++) {
+            Locator button = keypadButtons.nth(i);
+            String position = button.getAttribute("position");
+            String base64Src = button.locator("img").getAttribute("src");
+            
+            // Convert base64 to image
+            BufferedImage buttonImage = base64ToImage(base64Src);
+            
+            // Find best matching digit
+            String matchedDigit = findBestTemplateMatch(buttonImage, digitTemplates);
+            digitPositionMap.put(matchedDigit, position);
+        }
+        
+        // Enter PIN
+        for (char digitChar : pin.toCharArray()) {
+            String digit = String.valueOf(digitChar);
+            String position = digitPositionMap.get(digit);
+            if (position != null) {
+                page.locator(".key-cell-pin[position='" + position + "']").click();
+                Thread.sleep(500);
+            }
+        }
+    }
+    
+    private BufferedImage base64ToImage(String base64Src) throws IOException {
+        String base64Data = base64Src.substring(base64Src.indexOf(",") + 1);
+        byte[] imageBytes = Base64.getDecoder().decode(base64Data);
+        return ImageIO.read(new ByteArrayInputStream(imageBytes));
+    }
+    
+    private Map<String, BufferedImage> loadDigitTemplates() throws IOException {
+        Map<String, BufferedImage> templates = new HashMap<>();
+        // Load your template images for digits 0-9
+        for (int i = 0; i <= 9; i++) {
+            templates.put(String.valueOf(i), 
+                         ImageIO.read(new File("templates/digit_" + i + ".png")));
+        }
+        return templates;
+    }
+    
+    private String findBestTemplateMatch(BufferedImage image, 
+                                       Map<String, BufferedImage> templates) {
+        double bestScore = Double.MAX_VALUE;
+        String bestMatch = "0";
+        
+        for (Map.Entry<String, BufferedImage> template : templates.entrySet()) {
+            double score = calculateImageSimilarity(image, template.getValue());
+            if (score < bestScore) {
+                bestScore = score;
+                bestMatch = template.getKey();
+            }
+        }
+        return bestMatch;
+    }
+    
+    private double calculateImageSimilarity(BufferedImage img1, BufferedImage img2) {
+        // Simple pixel difference calculation
+        if (img1.getWidth() != img2.getWidth() || img1.getHeight() != img2.getHeight()) {
+            return Double.MAX_VALUE;
+        }
+        
+        long totalDiff = 0;
+        int pixels = img1.getWidth() * img1.getHeight();
+        
+        for (int x = 0; x < img1.getWidth(); x++) {
+            for (int y = 0; y < img1.getHeight(); y++) {
+                int rgb1 = img1.getRGB(x, y);
+                int rgb2 = img2.getRGB(x, y);
+                
+                int r1 = (rgb1 >> 16) & 0xFF;
+                int g1 = (rgb1 >> 8) & 0xFF;
+                int b1 = rgb1 & 0xFF;
+                
+                int r2 = (rgb2 >> 16) & 0xFF;
+                int g2 = (rgb2 >> 8) & 0xFF;
+                int b2 = rgb2 & 0xFF;
+                
+                totalDiff += Math.abs(r1 - r2) + Math.abs(g1 - g2) + Math.abs(b1 - b2);
+            }
+        }
+        
+        return (double) totalDiff / pixels;
+    }
+    
+    // Method 4: Machine Learning approach (requires training)
+    public void enterPinUsingML(Page page, String pin) {
+        // This would require a trained model (TensorFlow, OpenCV DNN, etc.)
+        // Implementation depends on your ML framework choice
+        
+        Map<String, String> digitPositionMap = new HashMap<>();
+        Locator keypadButtons = page.locator(".key-cell-pin");
+        
+        for (int i = 0; i < keypadButtons.count(); i++) {
+            Locator button = keypadButtons.nth(i);
+            String position = button.getAttribute("position");
+            String base64Src = button.locator("img").getAttribute("src");
+            
+            // Use trained model to classify the digit
+            String predictedDigit = classifyDigitWithML(base64Src);
+            digitPositionMap.put(predictedDigit, position);
+        }
+        
+        // Enter PIN using predictions
+        for (char digitChar : pin.toCharArray()) {
+            String digit = String.valueOf(digitChar);
+            String position = digitPositionMap.get(digit);
+            if (position != null) {
+                page.locator(".key-cell-pin[position='" + position + "']").click();
+                Thread.sleep(500);
+            }
+        }
+    }
+    
+    private String classifyDigitWithML(String base64Src) {
+        // Placeholder for ML classification
+        // You would implement this using your chosen ML framework
+        return "0"; // Return predicted digit
+    }
+    
+    // Method 5: Hash-based recognition (for consistent image generation)
+    public void enterPinUsingHashRecognition(Page page, String pin) {
+        // If the same digits always generate the same images, use hash mapping
+        Map<String, String> hashToDigitMap = loadHashMappings();
+        Map<String, String> digitPositionMap = new HashMap<>();
+        
+        Locator keypadButtons = page.locator(".key-cell-pin");
+        
+        for (int i = 0; i < keypadButtons.count(); i++) {
+            Locator button = keypadButtons.nth(i);
+            String position = button.getAttribute("position");
+            String base64Src = button.locator("img").getAttribute("src");
+            
+            String imageHash = calculateImageHash(base64Src);
+            String digit = hashToDigitMap.get(imageHash);
+            
+            if (digit != null) {
+                digitPositionMap.put(digit, position);
+            }
+        }
+        
+        // Enter PIN
+        for (char digitChar : pin.toCharArray()) {
+            String digit = String.valueOf(digitChar);
+            String position = digitPositionMap.get(digit);
+            if (position != null) {
+                page.locator(".key-cell-pin[position='" + position + "']").click();
+                Thread.sleep(500);
+            }
+        }
+    }
+    
+    private String calculateImageHash(String base64Src) {
+        try {
+            String base64Data = base64Src.substring(base64Src.indexOf(",") + 1);
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(base64Data.getBytes());
+            return Base64.getEncoder().encodeToString(hash);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    private Map<String, String> loadHashMappings() {
+        // Load pre-computed hash to digit mappings
+        // You would build this by manually mapping hashes to digits
+        return new HashMap<>();
+    }
+}
+
+// Usage example
+class KeypadTest {
+    public static void main(String[] args) {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch();
+            Page page = browser.newPage();
+            
+            page.navigate("your-website-url");
+            
+            KeypadAutomation keypad = new KeypadAutomation();
+            
+            // Try method 1 first (most reliable if OCR works)
+            keypad.enterPinUsingPosition(page, "1234");
+            
+            browser.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+----------------------------------------------	-------------------------------------------------
+

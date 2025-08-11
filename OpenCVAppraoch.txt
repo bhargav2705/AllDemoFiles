@@ -1,0 +1,224 @@
+OpenCV approach
+
+<dependencies>
+    <!-- Playwright -->
+    <dependency>
+        <groupId>com.microsoft.playwright</groupId>
+        <artifactId>playwright</artifactId>
+        <version>1.45.0</version>
+    </dependency>
+
+    <!-- OpenCV -->
+    <dependency>
+        <groupId>org.openpnp</groupId>
+        <artifactId>opencv</artifactId>
+        <version>4.7.0-0</version>
+    </dependency>
+
+    <!-- ImageIO for Java -->
+    <dependency>
+        <groupId>javax.annotation</groupId>
+        <artifactId>javax.annotation-api</artifactId>
+        <version>1.3.2</version>
+    </dependency>
+</dependencies>
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+import com.microsoft.playwright.*;
+import org.opencv.core.*;
+import org.opencv.imgcodecs.Imgcodecs;
+import org.opencv.imgproc.Imgproc;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.Base64;
+
+public class PlaywrightOpenCVPinEntry {
+
+    static {
+        // Load OpenCV native library
+        nu.pattern.OpenCV.loadLocally();
+    }
+
+    private final Map<Integer, Mat> templateDigits = new HashMap<>();
+
+    /** Load digit templates from folder (expects 0.png ... 9.png) */
+    public void loadTemplates(String templateFolder) {
+        Path folder = Paths.get(templateFolder);
+        for (int digit = 0; digit <= 9; digit++) {
+            Path file = folder.resolve(digit + ".png");
+            if (Files.exists(file)) {
+                Mat img = Imgcodecs.imread(file.toString(), Imgcodecs.IMREAD_GRAYSCALE);
+                templateDigits.put(digit, img);
+                System.out.println("Loaded template: " + file);
+            } else {
+                System.err.println("Missing template for digit " + digit);
+            }
+        }
+    }
+
+    /** Decode Base64 PNG to BufferedImage */
+    public static BufferedImage decodeBase64Image(String src) throws IOException {
+        if (src.startsWith("data:")) {
+            src = src.substring(src.indexOf(",") + 1);
+        }
+        byte[] bytes = Base64.getDecoder().decode(src);
+        try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes)) {
+            return ImageIO.read(bis);
+        }
+    }
+
+    /** Convert BufferedImage to Mat (grayscale) */
+    public static Mat bufferedImageToMat(BufferedImage bi) {
+        try {
+            File tempFile = File.createTempFile("cv_img_", ".png");
+            ImageIO.write(bi, "png", tempFile);
+            Mat mat = Imgcodecs.imread(tempFile.getAbsolutePath(), Imgcodecs.IMREAD_GRAYSCALE);
+            tempFile.delete();
+            return mat;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Match image to best digit using OpenCV template matching */
+    public Optional<Integer> matchDigit(Mat inputImage) {
+        double bestScore = -1;
+        int bestDigit = -1;
+
+        for (Map.Entry<Integer, Mat> entry : templateDigits.entrySet()) {
+            Mat template = entry.getValue();
+
+            // result matrix size
+            int resultCols = inputImage.cols() - template.cols() + 1;
+            int resultRows = inputImage.rows() - template.rows() + 1;
+            if (resultCols <= 0 || resultRows <= 0) continue;
+
+            Mat result = new Mat(resultRows, resultCols, CvType.CV_32FC1);
+            Imgproc.matchTemplate(inputImage, template, result, Imgproc.TM_CCOEFF_NORMED);
+            Core.MinMaxLocResult mmr = Core.minMaxLoc(result);
+
+            if (mmr.maxVal > bestScore) {
+                bestScore = mmr.maxVal;
+                bestDigit = entry.getKey();
+            }
+        }
+
+        // Threshold to avoid false positives (tune if needed)
+        if (bestScore >= 0.8) {
+            return Optional.of(bestDigit);
+        }
+        return Optional.empty();
+    }
+
+    /** Main automation flow with Playwright */
+    public static void main(String[] args) throws Exception {
+        PlaywrightOpenCVPinEntry matcher = new PlaywrightOpenCVPinEntry();
+        matcher.loadTemplates("templates");
+
+        Playwright playwright = Playwright.create();
+        Browser browser = playwright.chromium().launch(
+                new BrowserType.LaunchOptions().setHeadless(false));
+        Page page = browser.newPage();
+
+        page.navigate("https://your-keypad-page.com");
+        page.waitForSelector("div.key-cell-pin");
+
+        Locator cells = page.locator("div.key-cell-pin");
+        Map<Integer, Locator> digitMap = new HashMap<>();
+
+        for (int i = 0; i < cells.count(); i++) {
+            String src = cells.nth(i).locator("img").getAttribute("src");
+            BufferedImage bi = decodeBase64Image(src);
+            Mat mat = bufferedImageToMat(bi);
+            Optional<Integer> digit = matcher.matchDigit(mat);
+
+            if (digit.isPresent()) {
+                System.out.println("Matched digit: " + digit.get());
+                digitMap.put(digit.get(), cells.nth(i));
+            } else {
+                System.out.println("No confident match for key index " + i);
+            }
+        }
+
+        // Example: enter 4-digit PIN
+        String pin = "4837";
+        for (char c : pin.toCharArray()) {
+            int digit = Character.getNumericValue(c);
+            Locator loc = digitMap.get(digit);
+            if (loc != null) {
+                loc.click();
+                page.waitForTimeout(200);
+            } else {
+                throw new RuntimeException("Digit not found: " + digit);
+            }
+        }
+
+        browser.close();
+        playwright.close();
+    }
+}
+-------------------------------------------------------------------------------------------------------------------------------------------
+
+Here’s a quick Playwright script to capture images once and store as {digit}.png for your templates folder:
+
+java
+Copy
+Edit
+import com.microsoft.playwright.*;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.nio.file.*;
+import java.util.Base64;
+import java.util.Scanner;
+
+public class OpenCVTemplateCapturer {
+    public static BufferedImage decodeBase64Image(String src) throws IOException {
+        if (src.startsWith("data:")) {
+            src = src.substring(src.indexOf(",") + 1);
+        }
+        byte[] bytes = Base64.getDecoder().decode(src);
+        try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes)) {
+            return ImageIO.read(bis);
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Path templateDir = Paths.get("templates");
+        Files.createDirectories(templateDir);
+        Scanner scanner = new Scanner(System.in);
+
+        Playwright playwright = Playwright.create();
+        Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+        Page page = browser.newPage();
+
+        page.navigate("https://your-keypad-page.com");
+        page.waitForSelector("div.key-cell-pin");
+
+        Locator cells = page.locator("div.key-cell-pin");
+
+        for (int i = 0; i < cells.count(); i++) {
+            String src = cells.nth(i).locator("img").getAttribute("src");
+            BufferedImage img = decodeBase64Image(src);
+            File preview = new File("preview_" + i + ".png");
+            ImageIO.write(img, "png", preview);
+            System.out.println("Saved preview: " + preview.getAbsolutePath());
+            System.out.print("Enter digit for this image: ");
+            String digit = scanner.nextLine().trim();
+            if (digit.matches("\\d")) {
+                Path outPath = templateDir.resolve(digit + ".png");
+                ImageIO.write(img, "png", outPath.toFile());
+                System.out.println("Saved template for digit " + digit);
+            }
+        }
+
+        browser.close();
+        playwright.close();
+    }
+}
+-----------------------------------------------------------------------------------------------------------------------------------
