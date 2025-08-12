@@ -1,0 +1,324 @@
+Java Playwright approach for access code
+
+import com.microsoft.playwright.*;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.util.*;
+import java.util.Base64;
+
+public class DynamicKeypadAutomation {
+    static String TEMPLATE_FILE = "keypad_templates.dat";
+
+    public static void main(String[] args) throws Exception {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            Page page = browser.newPage();
+
+            page.navigate("https://your-keypad-page.com");
+
+            // Step 1: Build template if not exists
+            if (!new File(TEMPLATE_FILE).exists()) {
+                System.out.println("No template found. Building now...");
+                Map<Integer, String> templates = buildTemplates(page);
+                saveTemplates(templates);
+                System.out.println("Template saved!");
+            }
+
+            // Step 2: Load templates
+            Map<Integer, String> templates = loadTemplates();
+
+            // Step 3: Get current keypad images
+            Map<Integer, String> currentKeys = captureCurrentKeypad(page);
+
+            // Step 4: Map digit → position
+            Map<Integer, Integer> digitToPosition = matchDigitsToPositions(templates, currentKeys);
+
+            // Step 5: Enter desired PIN
+            String pin = "4837";
+            for (char c : pin.toCharArray()) {
+                int digit = Character.getNumericValue(c);
+                int pos = digitToPosition.get(digit);
+                page.locator(String.format(".uia-pin-%d", pos)).click();
+            }
+
+            System.out.println("PIN entered successfully!");
+        }
+    }
+
+    // Build reference templates (digit → base64)
+    static Map<Integer, String> buildTemplates(Page page) {
+        Map<Integer, String> templates = new HashMap<>();
+        for (int digit = 0; digit <= 9; digit++) {
+            String selector = String.format(".uia-pin-%d img", digit);
+            String base64 = page.locator(selector).evaluate("img => img.src.split(',').pop()").toString();
+            templates.put(digit, base64);
+        }
+        return templates;
+    }
+
+    // Save templates to disk
+    static void saveTemplates(Map<Integer, String> templates) throws IOException {
+        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(TEMPLATE_FILE))) {
+            oos.writeObject(templates);
+        }
+    }
+
+    // Load templates from disk
+    static Map<Integer, String> loadTemplates() throws IOException, ClassNotFoundException {
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(TEMPLATE_FILE))) {
+            return (Map<Integer, String>) ois.readObject();
+        }
+    }
+
+    // Capture current keypad state
+    static Map<Integer, String> captureCurrentKeypad(Page page) {
+        Map<Integer, String> keys = new HashMap<>();
+        for (int pos = 0; pos <= 9; pos++) {
+            String selector = String.format(".uia-pin-%d img", pos);
+            String base64 = page.locator(selector).evaluate("img => img.src.split(',').pop()").toString();
+            keys.put(pos, base64);
+        }
+        return keys;
+    }
+
+    // Match digits from template to current keypad positions
+    static Map<Integer, Integer> matchDigitsToPositions(Map<Integer, String> templates, Map<Integer, String> currentKeys) throws IOException {
+        Map<Integer, Integer> result = new HashMap<>();
+        for (Map.Entry<Integer, String> templateEntry : templates.entrySet()) {
+            int digit = templateEntry.getKey();
+            String templateBase64 = templateEntry.getValue();
+
+            boolean found = false;
+            for (Map.Entry<Integer, String> currentEntry : currentKeys.entrySet()) {
+                int pos = currentEntry.getKey();
+                String currentBase64 = currentEntry.getValue();
+
+                if (templateBase64.equals(currentBase64) || imagesAreSimilar(templateBase64, currentBase64)) {
+                    result.put(digit, pos);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                throw new RuntimeException("Could not match digit: " + digit);
+            }
+        }
+        return result;
+    }
+
+    // Compare two base64 images pixel-by-pixel
+    static boolean imagesAreSimilar(String base64a, String base64b) throws IOException {
+        byte[] bytesA = Base64.getDecoder().decode(base64a);
+        byte[] bytesB = Base64.getDecoder().decode(base64b);
+
+        BufferedImage imgA = ImageIO.read(new ByteArrayInputStream(bytesA));
+        BufferedImage imgB = ImageIO.read(new ByteArrayInputStream(bytesB));
+
+        if (imgA.getWidth() != imgB.getWidth() || imgA.getHeight() != imgB.getHeight()) return false;
+
+        int diffCount = 0;
+        for (int y = 0; y < imgA.getHeight(); y++) {
+            for (int x = 0; x < imgA.getWidth(); x++) {
+                if (imgA.getRGB(x, y) != imgB.getRGB(x, y)) {
+                    diffCount++;
+                }
+            }
+        }
+        return diffCount <= 14; // same threshold logic from C#
+    }
+}
+-----------------------------------------------------------------------------------------------------
+
+How This Matches Your C# Code
+buildTemplates() = your C# originalImages array creation.
+
+captureCurrentKeypad() = your C# GetCreateAccessCodeHashXposition.
+
+matchDigitsToPositions() = your C# GetImagePosition + AreSame.
+
+No OCR, no manual entry — works with only base64 + pixel match.
+
+Threshold (<=14 diff pixels) comes from your original specflow workaround.
+------------------------------------------------------------------------------------------------------------------
+
+Approach 2:
+
+
+import com.microsoft.playwright.*;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.nio.file.*;
+import java.security.MessageDigest;
+import java.util.*;
+import java.util.Base64;
+
+public class KeypadAutomationFlowAware {
+
+    private static final String TEMPLATE_FILE = "keypad_templates.dat";
+    private static final boolean FORCE_REBUILD = false; // set true if keypad changes
+
+    public static void main(String[] args) throws Exception {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            Page page = browser.newPage();
+
+            // Step 1: Navigate & fill personal/contact details
+            navigateToKeypad(page);
+
+            // Step 2: Keypad logic
+            handleKeypad(page, "4837");
+        }
+    }
+
+    private static void navigateToKeypad(Page page) {
+        // Example navigation - replace with your real flow
+        page.navigate("https://example.com/form");
+
+        page.fill("#firstName", "John");
+        page.fill("#lastName", "Doe");
+        page.fill("#contact", "9999999999");
+        page.click("#nextButton");
+
+        page.waitForSelector(".key-cell-pin img"); // wait for keypad
+    }
+
+    private static void handleKeypad(Page page, String pin) throws Exception {
+        Map<Integer, TemplateDigit> templates;
+
+        if (FORCE_REBUILD || !Files.exists(Paths.get(TEMPLATE_FILE))) {
+            System.out.println("Building keypad templates...");
+            templates = buildTemplates(page);
+            saveTemplates(templates);
+        } else {
+            System.out.println("Loading keypad templates...");
+            templates = loadTemplates();
+        }
+
+        Map<Integer, Integer> positionMap = mapKeypadPositions(page, templates);
+
+        for (char digitChar : pin.toCharArray()) {
+            int digit = Character.getNumericValue(digitChar);
+            int position = positionMap.get(digit);
+            page.click(".uia-pin-" + position);
+        }
+    }
+
+    private static Map<Integer, TemplateDigit> buildTemplates(Page page) throws Exception {
+        Map<Integer, TemplateDigit> templates = new HashMap<>();
+        List<ElementHandle> keys = page.querySelectorAll(".key-cell-pin img");
+
+        if (keys.size() != 10) {
+            throw new RuntimeException("Expected 10 keypad images, found: " + keys.size());
+        }
+
+        for (int digit = 0; digit <= 9; digit++) {
+            String base64 = getImageBase64(page, ".uia-pin-" + digit + " img");
+            String hash = hashBase64(base64);
+            BufferedImage img = base64ToImage(base64);
+            templates.put(digit, new TemplateDigit(hash, img));
+        }
+        return templates;
+    }
+
+    private static Map<Integer, Integer> mapKeypadPositions(Page page, Map<Integer, TemplateDigit> templates) throws Exception {
+        Map<Integer, Integer> map = new HashMap<>();
+        List<ElementHandle> keys = page.querySelectorAll(".key-cell-pin img");
+
+        for (int pos = 0; pos < keys.size(); pos++) {
+            String base64 = getImageBase64(keys.get(pos));
+            String hash = hashBase64(base64);
+            BufferedImage currentImg = base64ToImage(base64);
+
+            for (Map.Entry<Integer, TemplateDigit> entry : templates.entrySet()) {
+                TemplateDigit templateDigit = entry.getValue();
+
+                // Primary match: hash
+                if (templateDigit.hash.equals(hash)) {
+                    map.put(entry.getKey(), pos);
+                    break;
+                }
+
+                // Fallback: pixel-by-pixel comparison
+                if (areImagesSame(templateDigit.image, currentImg)) {
+                    map.put(entry.getKey(), pos);
+                    break;
+                }
+            }
+        }
+        return map;
+    }
+
+    private static String getImageBase64(Page page, String selector) {
+        return page.evalOnSelector(selector,
+                "img => img.src.split(',').pop()").toString();
+    }
+
+    private static String getImageBase64(ElementHandle img) {
+        return img.evaluate("img => img.src.split(',').pop()").toString();
+    }
+
+    private static String hashBase64(String base64) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hashBytes = digest.digest(Base64.getDecoder().decode(base64));
+        StringBuilder sb = new StringBuilder();
+        for (byte b : hashBytes) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
+
+    private static BufferedImage base64ToImage(String base64) throws IOException {
+        byte[] bytes = Base64.getDecoder().decode(base64);
+        return ImageIO.read(new ByteArrayInputStream(bytes));
+    }
+
+    private static boolean areImagesSame(BufferedImage img1, BufferedImage img2) {
+        if (img1.getWidth() != img2.getWidth() || img1.getHeight() != img2.getHeight()) return false;
+
+        for (int y = 0; y < img1.getHeight(); y++) {
+            for (int x = 0; x < img1.getWidth(); x++) {
+                if (img1.getRGB(x, y) != img2.getRGB(x, y)) return false;
+            }
+        }
+        return true;
+    }
+
+    private static void saveTemplates(Map<Integer, TemplateDigit> templates) throws IOException {
+        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(TEMPLATE_FILE))) {
+            out.writeObject(templates);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<Integer, TemplateDigit> loadTemplates() throws IOException, ClassNotFoundException {
+        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(TEMPLATE_FILE))) {
+            return (Map<Integer, TemplateDigit>) in.readObject();
+        }
+    }
+
+    private static class TemplateDigit implements Serializable {
+        String hash;
+        transient BufferedImage image;
+
+        TemplateDigit(String hash, BufferedImage image) {
+            this.hash = hash;
+            this.image = image;
+        }
+
+        private void writeObject(ObjectOutputStream out) throws IOException {
+            out.defaultWriteObject();
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            ImageIO.write(image, "png", baos);
+            out.writeInt(baos.size());
+            out.write(baos.toByteArray());
+        }
+
+        private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+            in.defaultReadObject();
+            int length = in.readInt();
+            byte[] bytes = new byte[length];
+            in.readFully(bytes);
+            image = ImageIO.read(new ByteArrayInputStream(bytes));
+        }
+    }
+}
