@@ -1,0 +1,528 @@
+New Approach Image comparision
+
+import com.microsoft.playwright.*;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.util.*;
+import java.util.Base64;
+
+// Main test class method
+public void setPin(String pin) {
+    Map<String, Integer> jsImages = GenericKeypadModule.getCreateAccessCodeHashXPosition(page);
+    
+    for (char c : pin.toCharArray()) {
+        int digitValue = Character.getNumericValue(c);
+        int position = GenericKeypadModule.getCreateAccessCodePinPosition(digitValue, jsImages);
+        
+        String selector = String.format("%s .uia-pin-%d", rootCss, position);
+        Locator elements = page.locator(selector);
+        int count = elements.count();
+        
+        for (int i = 0; i < count; i++) {
+            if (elements.nth(i).isVisible()) {
+                takeAppliToolsSnapshot("CreateAccessCodePage");
+                elements.nth(i).click();
+                break;
+            }
+        }
+    }
+}
+
+// GenericKeypadModule class
+public class GenericKeypadModule {
+    
+    private static final String IMAGE_SOURCE_SCRIPT_CREATE_ACCESS_CODE = 
+        """
+        (function(pinIndex) {
+            var img = document.querySelector('abc-dashboard abc-create-access-code-dialog abc-modal-dialog div div.abc-create-access-code-dialog:not([hidden]).uia-pin-' + pinIndex + ' img');
+            return img && img.src ? img.src.split(',').pop() : null;
+        })(%d)
+        """;
+    
+    public static Map<String, Integer> getCreateAccessCodeHashXPosition(Page page) {
+        Map<String, Integer> dictionaryButton = new HashMap<>();
+        
+        for (int i = 0; i <= 10; i++) {
+            // Using Playwright's evaluate with parameter passing
+            Object result = page.evaluate(
+                """
+                (pinIndex) => {
+                    var img = document.querySelector('abc-dashboard abc-create-access-code-dialog abc-modal-dialog div div.abc-create-access-code-dialog:not([hidden]).uia-pin-' + pinIndex + ' img');
+                    return img && img.src ? img.src.split(',').pop() : null;
+                }
+                """, i);
+            
+            if (result != null && !result.toString().isEmpty() && !"null".equals(result.toString())) {
+                String data = result.toString();
+                dictionaryButton.put(data, i);
+            }
+        }
+        
+        return dictionaryButton;
+    }
+    
+    public static int getCreateAccessCodePinPosition(int pinKey, Map<String, Integer> images) {
+        return KeyPadImageComparison.getImagePosition((byte) pinKey, 
+                                                     images.keySet().toArray(new String[0]));
+    }
+}
+
+// KeyPadImageComparison class with complete image comparison logic
+public class KeyPadImageComparison {
+    
+    // Reference images for digits 0-9
+    // Each digit has two variants: [original, generated_variant]
+    private static final String[][] ORIGINAL_IMAGES = new String[10][2];
+    
+    static {
+        // Initialize with your base64 encoded reference images
+        // Replace these with your actual base64 encoded images
+        ORIGINAL_IMAGES[0][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 0 original
+        ORIGINAL_IMAGES[0][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 0 variant
+        ORIGINAL_IMAGES[1][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 1 original
+        ORIGINAL_IMAGES[1][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 1 variant
+        ORIGINAL_IMAGES[2][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 2 original
+        ORIGINAL_IMAGES[2][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 2 variant
+        ORIGINAL_IMAGES[3][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 3 original
+        ORIGINAL_IMAGES[3][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 3 variant
+        ORIGINAL_IMAGES[4][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 4 original
+        ORIGINAL_IMAGES[4][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 4 variant
+        ORIGINAL_IMAGES[5][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 5 original
+        ORIGINAL_IMAGES[5][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 5 variant
+        ORIGINAL_IMAGES[6][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 6 original
+        ORIGINAL_IMAGES[6][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 6 variant
+        ORIGINAL_IMAGES[7][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 7 original
+        ORIGINAL_IMAGES[7][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 7 variant
+        ORIGINAL_IMAGES[8][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 8 original
+        ORIGINAL_IMAGES[8][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 8 variant
+        ORIGINAL_IMAGES[9][0] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 9 original
+        ORIGINAL_IMAGES[9][1] = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAB3RJTUUH5wMQFhYq..."; // digit 9 variant
+    }
+    
+    public static int getImagePosition(byte imgNumber, String[] keyPadImages) {
+        for (int index = 0; index < keyPadImages.length; index++) {
+            // Check against original image first (exact match)
+            if (keyPadImages[index].equals(ORIGINAL_IMAGES[imgNumber][0])) {
+                return index;
+            }
+            
+            // Check against generated variant with pixel comparison
+            if (areSame(ORIGINAL_IMAGES[imgNumber][1], keyPadImages[index])) {
+                return index;
+            }
+        }
+        
+        throw new RuntimeException("Keypad image for digit " + imgNumber + " cannot be found");
+    }
+    
+    /**
+     * Compares two base64 encoded images allowing for minor pixel differences
+     * The generated image has at least 14 different pixels compared to the original
+     * while it's expected to only have one different pixel in theory.
+     * This method handles the pixel difference tolerance.
+     */
+    private static boolean areSame(String originalImageBase64, String currentImageBase64) {
+        try {
+            // Decode base64 images
+            byte[] originalBytes = Base64.getDecoder().decode(originalImageBase64);
+            byte[] currentBytes = Base64.getDecoder().decode(currentImageBase64);
+            
+            // Convert to BufferedImages
+            BufferedImage originalImage = ImageIO.read(new ByteArrayInputStream(originalBytes));
+            BufferedImage currentImage = ImageIO.read(new ByteArrayInputStream(currentBytes));
+            
+            if (originalImage == null || currentImage == null) {
+                return false;
+            }
+            
+            // Check dimensions
+            if (originalImage.getWidth() != currentImage.getWidth() || 
+                originalImage.getHeight() != currentImage.getHeight()) {
+                return false;
+            }
+            
+            return compareImagePixels(originalImage, currentImage);
+            
+        } catch (IllegalArgumentException | IOException e) {
+            System.err.println("Error comparing images: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Compares two BufferedImages pixel by pixel with tolerance for minor differences
+     * Allows up to 2% pixel difference to handle slight variations in generated images
+     */
+    private static boolean compareImagePixels(BufferedImage original, BufferedImage current) {
+        int width = original.getWidth();
+        int height = original.getHeight();
+        int totalPixels = width * height;
+        int differentPixels = 0;
+        int maxAllowedDifferences = (int) (totalPixels * 0.02); // 2% tolerance
+        
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                int originalPixel = original.getRGB(x, y);
+                int currentPixel = current.getRGB(x, y);
+                
+                if (originalPixel != currentPixel) {
+                    differentPixels++;
+                    // Early exit if too many differences
+                    if (differentPixels > maxAllowedDifferences) {
+                        return false;
+                    }
+                }
+            }
+        }
+        
+        return differentPixels <= maxAllowedDifferences;
+    }
+    
+    /**
+     * Alternative comparison method using color channel differences
+     * More sophisticated comparison that considers RGB channel differences
+     */
+    private static boolean areSameAdvanced(String originalImageBase64, String currentImageBase64) {
+        try {
+            byte[] originalBytes = Base64.getDecoder().decode(originalImageBase64);
+            byte[] currentBytes = Base64.getDecoder().decode(currentImageBase64);
+            
+            BufferedImage originalImage = ImageIO.read(new ByteArrayInputStream(originalBytes));
+            BufferedImage currentImage = ImageIO.read(new ByteArrayInputStream(currentBytes));
+            
+            if (originalImage == null || currentImage == null ||
+                originalImage.getWidth() != currentImage.getWidth() ||
+                originalImage.getHeight() != currentImage.getHeight()) {
+                return false;
+            }
+            
+            return compareImageWithColorTolerance(originalImage, currentImage);
+            
+        } catch (Exception e) {
+            return false;
+        }
+    }
+    
+    /**
+     * Compares images with tolerance for color variations
+     * Allows for slight differences in RGB values per pixel
+     */
+    private static boolean compareImageWithColorTolerance(BufferedImage original, BufferedImage current) {
+        int width = original.getWidth();
+        int height = original.getHeight();
+        int totalPixels = width * height;
+        int significantDifferences = 0;
+        int colorTolerance = 10; // Allow up to 10 units difference per RGB channel
+        double maxDifferenceRatio = 0.05; // Allow 5% of pixels to have significant differences
+        
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                int originalRGB = original.getRGB(x, y);
+                int currentRGB = current.getRGB(x, y);
+                
+                if (originalRGB != currentRGB) {
+                    // Extract RGB components
+                    int origR = (originalRGB >> 16) & 0xFF;
+                    int origG = (originalRGB >> 8) & 0xFF;
+                    int origB = originalRGB & 0xFF;
+                    
+                    int currR = (currentRGB >> 16) & 0xFF;
+                    int currG = (currentRGB >> 8) & 0xFF;
+                    int currB = currentRGB & 0xFF;
+                    
+                    // Check if differences exceed tolerance
+                    if (Math.abs(origR - currR) > colorTolerance ||
+                        Math.abs(origG - currG) > colorTolerance ||
+                        Math.abs(origB - currB) > colorTolerance) {
+                        significantDifferences++;
+                    }
+                }
+            }
+        }
+        
+        double differenceRatio = (double) significantDifferences / totalPixels;
+        return differenceRatio <= maxDifferenceRatio;
+    }
+    
+    /**
+     * Utility method to calculate image similarity percentage
+     * Useful for debugging and logging
+     */
+    public static double calculateSimilarityPercentage(String image1Base64, String image2Base64) {
+        try {
+            byte[] bytes1 = Base64.getDecoder().decode(image1Base64);
+            byte[] bytes2 = Base64.getDecoder().decode(image2Base64);
+            
+            BufferedImage img1 = ImageIO.read(new ByteArrayInputStream(bytes1));
+            BufferedImage img2 = ImageIO.read(new ByteArrayInputStream(bytes2));
+            
+            if (img1 == null || img2 == null ||
+                img1.getWidth() != img2.getWidth() ||
+                img1.getHeight() != img2.getHeight()) {
+                return 0.0;
+            }
+            
+            int totalPixels = img1.getWidth() * img1.getHeight();
+            int matchingPixels = 0;
+            
+            for (int x = 0; x < img1.getWidth(); x++) {
+                for (int y = 0; y < img1.getHeight(); y++) {
+                    if (img1.getRGB(x, y) == img2.getRGB(x, y)) {
+                        matchingPixels++;
+                    }
+                }
+            }
+            
+            return ((double) matchingPixels / totalPixels) * 100.0;
+            
+        } catch (Exception e) {
+            return 0.0;
+        }
+    }
+}
+
+// Usage example
+public class CreateAccessCodeTest {
+    private Page page;
+    private String rootCss = ".abc-create-access-code-dialog";
+    
+    public void testPinEntry() {
+        // Initialize Playwright
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            page = browser.newPage();
+            
+            // Navigate to page
+            page.navigate("https://example.com/create-access-code");
+            
+            // Enter PIN
+            setPin("1234");
+        }
+    }
+    
+    private void takeAppliToolsSnapshot(String stepName) {
+        // Implement your Applitools integration or screenshot logic
+        System.out.println("Taking snapshot: " + stepName);
+    }
+}
+-----------------------------------------------------------------------------------------------------------------------
+
+Without Applitools--ORIGINAL_IMAGES
+import com.microsoft.playwright.*;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.util.*;
+import javax.imageio.ImageIO;
+import java.util.Base64;
+
+public class KeypadAutomation {
+    // Store reference images: digit -> base64 string (original, alternate)
+    private static final String[][] originalImages = new String[10][2];
+
+    static {
+        // Fill with your known base64 templates for digits 0-9
+        // Example: originalImages[0][0] = "iVBORw0KGgoAAAANSUhEUgAA...";
+        //          originalImages[0][1] = "alternateBase64...";
+    }
+
+    public static void main(String[] args) {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            Page page = browser.newPage();
+
+            page.navigate("https://example.com/your-keypad-page");
+
+            String pin = "4837";
+            Map<String, Integer> base64ToPos = getKeypadMapping(page);
+
+            for (char digitChar : pin.toCharArray()) {
+                int digit = Character.getNumericValue(digitChar);
+                int position = getKeypadPosition(digit, base64ToPos.keySet().toArray(new String[0]));
+                int actualPosIndex = base64ToPos.getOrDefault(getBase64ForDigitAtPosition(position, base64ToPos), position);
+
+                Locator button = page.locator(".uia-pin-" + actualPosIndex);
+                button.first().click();
+            }
+        }
+    }
+
+    // Extract base64 for each visible keypad button and map to its index
+    private static Map<String, Integer> getKeypadMapping(Page page) {
+        Map<String, Integer> map = new HashMap<>();
+        for (int i = 0; i < 10; i++) {
+            String selector = ".uia-pin-" + i + " img";
+            String base64 = page.locator(selector).evaluate("img => img.src.split(',').pop()");
+            map.put(base64, i);
+        }
+        return map;
+    }
+
+    // Find keypad position for a given digit based on stored original templates
+    private static int getKeypadPosition(int digit, String[] currentKeypadBase64) {
+        for (int idx = 0; idx < currentKeypadBase64.length; idx++) {
+            // Direct base64 match
+            if (currentKeypadBase64[idx].equals(originalImages[digit][0])) {
+                return idx;
+            }
+            // Pixel comparison fallback
+            if (areSame(originalImages[digit][1], currentKeypadBase64[idx])) {
+                return idx;
+            }
+        }
+        throw new RuntimeException("Keypad image for digit " + digit + " not found!");
+    }
+
+    // Decode and compare pixel differences
+    private static boolean areSame(String base64A, String base64B) {
+        try {
+            BufferedImage imgA = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(base64A)));
+            BufferedImage imgB = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(base64B)));
+            if (imgA.getWidth() != imgB.getWidth() || imgA.getHeight() != imgB.getHeight()) {
+                return false;
+            }
+            int diffCount = 0;
+            for (int y = 0; y < imgA.getHeight(); y++) {
+                for (int x = 0; x < imgA.getWidth(); x++) {
+                    if (imgA.getRGB(x, y) != imgB.getRGB(x, y)) {
+                        diffCount++;
+                        if (diffCount > 14) return false; // same threshold as C#
+                    }
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // Get the base64 string for a given keypad position
+    private static String getBase64ForDigitAtPosition(int position, Map<String, Integer> map) {
+        for (Map.Entry<String, Integer> entry : map.entrySet()) {
+            if (entry.getValue() == position) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+}
+-------------------------------------------------------------------------------------------------------------------
+
+Modified solution
+
+import com.microsoft.playwright.*;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.util.*;
+import javax.imageio.ImageIO;
+import java.util.Base64;
+
+public class DynamicKeypadAutomation {
+    // Templates for digits 0–9 (you must fill in your base64 reference images)
+    // Each digit can have multiple variations (e.g., light/dark themes, fonts)
+    private static final List<String>[] templates = new List[10];
+
+    static {
+        for (int i = 0; i < 10; i++) {
+            templates[i] = new ArrayList<>();
+        }
+        // Example (add your real base64s here)
+        // templates[0].add("iVBORw0KGgoAAAANSUhEUgAA...");
+        // templates[0].add("alternateVersionBase64...");
+    }
+
+    public static void main(String[] args) {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+            Page page = browser.newPage();
+
+            // Navigate to keypad page
+            page.navigate("https://example.com/your-keypad-page");
+
+            String pin = "4837";
+
+            // 1️⃣ Build a fresh mapping of digit -> position for this run
+            Map<Integer, Integer> digitToPosition = buildDigitPositionMap(page);
+
+            // 2️⃣ Use mapping to click the digits in the PIN
+            for (char d : pin.toCharArray()) {
+                int digit = Character.getNumericValue(d);
+                if (!digitToPosition.containsKey(digit)) {
+                    throw new RuntimeException("Digit " + digit + " not found on keypad!");
+                }
+                int position = digitToPosition.get(digit);
+                page.locator(".uia-pin-" + position).click();
+            }
+        }
+    }
+
+    /**
+     * Builds a mapping of digit -> keypad position dynamically by comparing
+     * live base64 images with stored templates (including pixel-pixel fallback)
+     */
+    private static Map<Integer, Integer> buildDigitPositionMap(Page page) {
+        Map<Integer, Integer> map = new HashMap<>();
+
+        for (int pos = 0; pos < 10; pos++) {
+            String selector = ".uia-pin-" + pos + " img";
+            String currentBase64 = page.locator(selector).evaluate("img => img.src.split(',').pop()");
+
+            int matchedDigit = identifyDigit(currentBase64);
+            if (matchedDigit != -1) {
+                map.put(matchedDigit, pos);
+            } else {
+                throw new RuntimeException("Could not identify digit at position " + pos);
+            }
+        }
+        return map;
+    }
+
+    /**
+     * Identifies the digit for the given base64 image by checking templates
+     */
+    private static int identifyDigit(String currentBase64) {
+        for (int digit = 0; digit <= 9; digit++) {
+            // Direct base64 match
+            for (String templateBase64 : templates[digit]) {
+                if (templateBase64.equals(currentBase64)) {
+                    return digit;
+                }
+                // Pixel match fallback
+                if (areSame(templateBase64, currentBase64)) {
+                    return digit;
+                }
+            }
+        }
+        return -1; // Not found
+    }
+
+    /**
+     * Pixel-by-pixel comparison with a tolerance threshold
+     */
+    private static boolean areSame(String base64A, String base64B) {
+        try {
+            BufferedImage imgA = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(base64A)));
+            BufferedImage imgB = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(base64B)));
+
+            if (imgA.getWidth() != imgB.getWidth() || imgA.getHeight() != imgB.getHeight()) {
+                return false;
+            }
+
+            int diffCount = 0;
+            int threshold = 14; // allow small noise
+
+            for (int y = 0; y < imgA.getHeight(); y++) {
+                for (int x = 0; x < imgA.getWidth(); x++) {
+                    if (imgA.getRGB(x, y) != imgB.getRGB(x, y)) {
+                        diffCount++;
+                        if (diffCount > threshold) return false;
+                    }
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+}
