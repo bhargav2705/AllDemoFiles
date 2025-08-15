@@ -1,0 +1,58 @@
+import com.microsoft.playwright.*;
+
+public class ExtractPRIdWithRetry {
+    public static void main(String[] args) {
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions()
+                    .setHeadless(false));
+            Page page = browser.newPage();
+
+            // Navigate to target
+            page.navigate("https://example.com");
+
+            String innerFormCss = ".my-form";
+
+            // Wait until at least one match exists (so we don't check an empty list)
+            page.waitForSelector(innerFormCss);
+
+            // Retry loop settings
+            int maxRetries = 10;   // total attempts
+            int waitBetweenRetriesMs = 500; // delay between attempts
+
+            Object prId = null;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                String script = String.format(
+                    "(() => {" +
+                    "  const elements = document.querySelectorAll('%s');" +
+                    "  if (elements.length > 1) {" +
+                    "    return elements[1]?.DummyRequest?.details?.PRId ?? null;" +
+                    "  }" +
+                    "  return null;" +
+                    "})()",
+                    innerFormCss
+                );
+
+                prId = page.evaluate(script);
+
+                if (prId != null && !prId.toString().isEmpty()) {
+                    System.out.println("PRId found: " + prId);
+                    break;
+                } else {
+                    System.out.println("Attempt " + attempt + ": PRId not available yet, retrying...");
+                    try {
+                        Thread.sleep(waitBetweenRetriesMs);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+
+            if (prId == null || prId.toString().isEmpty()) {
+                System.out.println("Failed to get PRId within retry limit.");
+            }
+
+            browser.close();
+        }
+    }
+}
