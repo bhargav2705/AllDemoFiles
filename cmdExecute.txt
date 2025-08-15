@@ -1,0 +1,123 @@
+cmd execute
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+
+public class JarExecutorDirect {
+
+    public static void main(String[] args) {
+        // Example dynamic parameters
+        String param1 = "HelloWorld";
+        String param2 = "TestValue";
+
+        // Path to your jar
+        String jarPath = "C:\\fakepath\\MyCode.jar";
+
+        // Class to execute inside the jar
+        String mainClass = "Main";
+
+        runJarDirect(jarPath, mainClass, param1, param2);
+    }
+
+    public static void runJarDirect(String jarPath, String mainClass, String param1, String param2) {
+        try {
+            // Build command without cmd.exe
+            ProcessBuilder pb = new ProcessBuilder(
+                "java", "-cp", jarPath, mainClass, param1, param2
+            );
+
+            // Merge stderr into stdout
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+
+            // Read and print output
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    System.out.println(line);
+                }
+            }
+
+            // Wait for process to finish
+            int exitCode = process.waitFor();
+            System.out.println("Process exited with code: " + exitCode);
+
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+----------------------------------------------------------------------------------------------------
+
+Approach 2:
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.file.Paths;
+
+public class JarExecutorDirect {
+
+    public static void main(String[] args) {
+        // Example dynamic parameters
+        String param1 = "HelloWorld";
+        String param2 = "TestValue";
+
+        // Path to your jar
+        String jarPath = "C:\\fakepath\\MyCode.jar";
+
+        // Class to execute inside the jar
+        String mainClass = "Main";
+
+        runJarDirect(jarPath, mainClass, param1, param2);
+    }
+
+    public static void runJarDirect(String jarPath, String mainClass, String param1, String param2) {
+        try {
+            // Get Java executable path from JAVA_HOME if available
+            String javaCommand = getJavaExecutable();
+
+            // Build command
+            ProcessBuilder pb = new ProcessBuilder(
+                javaCommand, "-cp", jarPath, mainClass, param1, param2
+            );
+
+            // Merge stderr into stdout
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+
+            // Read and print output
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    System.out.println(line);
+                }
+            }
+
+            // Wait for process to finish
+            int exitCode = process.waitFor();
+            System.out.println("Process exited with code: " + exitCode);
+
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static String getJavaExecutable() {
+        String javaHome = System.getenv("JAVA_HOME");
+        if (javaHome != null && !javaHome.isBlank()) {
+            // Construct full path to java binary
+            String javaPath = Paths.get(javaHome, "bin", "java").toString();
+            return javaPath;
+        } else {
+            // Fallback to system java
+            return "java";
+        }
+    }
+}
